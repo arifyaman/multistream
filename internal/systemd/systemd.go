@@ -1,4 +1,5 @@
-package main
+// Package systemd queries unit state via systemctl and the journal.
+package systemd
 
 import (
 	"bufio"
@@ -11,6 +12,12 @@ import (
 	"time"
 )
 
+// queryTimeout bounds systemctl lookups.
+const queryTimeout = 5 * time.Second
+
+// journalTimeout bounds journalctl reads.
+const journalTimeout = 10 * time.Second
+
 // UnitState is the normalized state of a systemd unit.
 type UnitState struct {
 	Exists   bool
@@ -20,19 +27,30 @@ type UnitState struct {
 	PID      int
 }
 
-// unitName normalizes a unit name to a .service name.
-func unitName(u string) string {
+// UnitName normalizes a unit name to a .service name.
+func UnitName(u string) string {
 	if strings.HasSuffix(u, ".service") {
 		return u
 	}
 	return u + ".service"
 }
 
+// parseShowOutput parses `systemctl show -p ...` key=value output.
+func parseShowOutput(out string) map[string]string {
+	vals := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if i := strings.IndexByte(line, '='); i > 0 {
+			vals[line[:i]] = line[i+1:]
+		}
+	}
+	return vals
+}
+
 // QueryUnit asks systemd for a unit's state. It is read-only.
-func QueryUnit(unit string) (UnitState, error) {
+func QueryUnit(ctx context.Context, unit string) (UnitState, error) {
 	var st UnitState
-	name := unitName(unit)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	name := UnitName(unit)
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "systemctl", "show",
 		"-p", "LoadState", "-p", "ActiveState", "-p", "SubState",
@@ -40,12 +58,7 @@ func QueryUnit(unit string) (UnitState, error) {
 	if err != nil {
 		return st, fmt.Errorf("systemctl show %s: %w", name, err)
 	}
-	vals := map[string]string{}
-	for _, line := range strings.Split(string(out), "\n") {
-		if i := strings.IndexByte(line, '='); i > 0 {
-			vals[line[:i]] = line[i+1:]
-		}
-	}
+	vals := parseShowOutput(string(out))
 	st.Exists = vals["LoadState"] == "loaded"
 	st.Active = vals["ActiveState"]
 	st.Sub = vals["SubState"]
@@ -56,9 +69,9 @@ func QueryUnit(unit string) (UnitState, error) {
 
 // LastUnitError returns the last error-priority journal line for a unit,
 // or "" when there are none. Used to surface push failures.
-func LastUnitError(unit string) string {
-	name := unitName(unit)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func LastUnitError(ctx context.Context, unit string) string {
+	name := UnitName(unit)
+	ctx, cancel := context.WithTimeout(ctx, journalTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "journalctl", "-u", name, "--no-pager", "-q",
 		"-n", "300", "-p", "err", "--output=cat")
@@ -82,13 +95,13 @@ func LastUnitError(unit string) string {
 }
 
 // RestartUnit restarts a unit, escalating to sudo when not root.
-func RestartUnit(unit string) error {
-	name := unitName(unit)
+func RestartUnit(ctx context.Context, unit string) error {
+	name := UnitName(unit)
 	var cmd *exec.Cmd
 	if os.Geteuid() != 0 {
-		cmd = exec.Command("sudo", "systemctl", "restart", name)
+		cmd = exec.CommandContext(ctx, "sudo", "systemctl", "restart", name)
 	} else {
-		cmd = exec.Command("systemctl", "restart", name)
+		cmd = exec.CommandContext(ctx, "systemctl", "restart", name)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -1,6 +1,7 @@
-package main
+package mediamtx
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -34,8 +35,8 @@ func TestGetPathInfo(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newMediaMTXClient(srv.URL)
-	p, err := c.GetPath("live/test")
+	c := NewClient(srv.URL)
+	p, err := c.GetPath(context.Background(), "live/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,15 +72,15 @@ func TestGetPathNotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newMediaMTXClient(srv.URL)
-	if _, err := c.GetPath("live/missing"); err == nil {
+	c := NewClient(srv.URL)
+	if _, err := c.GetPath(context.Background(), "live/missing"); err == nil {
 		t.Fatal("want error for 404")
 	}
 }
 
 func TestGetPathUnreachable(t *testing.T) {
-	c := newMediaMTXClient("http://127.0.0.1:1")
-	if _, err := c.GetPath("live/test"); err == nil {
+	c := NewClient("http://127.0.0.1:1")
+	if _, err := c.GetPath(context.Background(), "live/test"); err == nil {
 		t.Fatal("want error for unreachable API")
 	}
 }
@@ -93,8 +94,8 @@ func TestVersion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newMediaMTXClient(srv.URL)
-	v, err := c.Version()
+	c := NewClient(srv.URL)
+	v, err := c.Version(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,8 +118,8 @@ func TestInfoNoVideoTrack(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newMediaMTXClient(srv.URL)
-	p, err := c.GetPath("live/audio-only")
+	c := NewClient(srv.URL)
+	p, err := c.GetPath(context.Background(), "live/audio-only")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,5 +132,14 @@ func TestInfoNoVideoTrack(t *testing.T) {
 	}
 	if info.AudioCodec != "MPEG-4 Audio" {
 		t.Errorf("audioCodec = %q", info.AudioCodec)
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	if got := truncate("short", 10); got != "short" {
+		t.Errorf("truncate(short) = %q", got)
+	}
+	if got := truncate("0123456789", 5); got != "01..." {
+		t.Errorf("truncate(long) = %q", got)
 	}
 }

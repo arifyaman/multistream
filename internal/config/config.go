@@ -1,4 +1,5 @@
-package main
+// Package config loads and validates the multistream configuration file.
+package config
 
 import (
 	"encoding/json"
@@ -10,19 +11,32 @@ import (
 
 // Platform is one re-broadcast destination.
 type Platform struct {
-	Name    string `json:"name"`
-	Unit    string `json:"unit"`
+	// Name is the unique, user-facing identifier (also the key file name
+	// stem: <keys_dir>/<name>.env).
+	Name string `json:"name"`
+	// Unit is the systemd unit that pushes to this platform.
+	Unit string `json:"unit"`
+	// PushURL is the RTMP(S) push URL. It may contain ${ENV_VAR} templates
+	// (used by the systemd unit); the CLI itself never resolves them.
 	PushURL string `json:"push_url"`
 }
 
 // Config is the CLI configuration, loaded from a JSON file.
 type Config struct {
-	MediaMTXAPI string     `json:"mediamtx_api"`
-	IngestPath  string     `json:"ingest_path"`
-	IngestPort  int        `json:"ingest_port,omitempty"`
-	RefreshSec  int        `json:"refresh_sec,omitempty"`
-	KeysDir     string     `json:"keys_dir,omitempty"`
-	Platforms   []Platform `json:"platforms"`
+	// MediaMTXAPI is the mediamtx Control API base URL (loopback).
+	MediaMTXAPI string `json:"mediamtx_api"`
+	// IngestPath is the mediamtx path OBS publishes to (e.g. "live/<name>").
+	IngestPath string `json:"ingest_path"`
+	// IngestPort is the mediamtx RTMP port used for per-platform
+	// connection checks. Default 1935.
+	IngestPort int `json:"ingest_port,omitempty"`
+	// RefreshSec is the default --watch refresh interval in seconds.
+	// Default 2.
+	RefreshSec int `json:"refresh_sec,omitempty"`
+	// KeysDir holds the 0600 key env files (<name>.env per platform).
+	KeysDir string `json:"keys_dir,omitempty"`
+	// Platforms is the list of re-broadcast destinations.
+	Platforms []Platform `json:"platforms"`
 
 	src string
 }
@@ -40,7 +54,17 @@ func (c *Config) PlatformByName(name string) (*Platform, bool) {
 	return nil, false
 }
 
-func defaultConfigPaths() []string {
+// KeyFile returns the expected path of a platform's key env file, or "".
+func (c *Config) KeyFile(p *Platform) string {
+	if c.KeysDir == "" {
+		return ""
+	}
+	return c.KeysDir + "/" + p.Name + ".env"
+}
+
+// DefaultConfigPaths returns the candidate config locations, in priority
+// order: $MULTISTREAM_CONFIG, /etc/multistream/config.json, ./config.json.
+func DefaultConfigPaths() []string {
 	paths := []string{}
 	if p := os.Getenv("MULTISTREAM_CONFIG"); p != "" {
 		paths = append(paths, p)
@@ -53,7 +77,7 @@ func defaultConfigPaths() []string {
 // default location that exists when path is empty.
 func LoadConfig(path string) (*Config, error) {
 	if path == "" {
-		for _, p := range defaultConfigPaths() {
+		for _, p := range DefaultConfigPaths() {
 			if _, err := os.Stat(p); err == nil {
 				path = p
 				break
@@ -61,7 +85,7 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		if path == "" {
 			return nil, fmt.Errorf("config not found (searched %s); use -config <file> or $MULTISTREAM_CONFIG",
-				strings.Join(defaultConfigPaths(), ", "))
+				strings.Join(DefaultConfigPaths(), ", "))
 		}
 	}
 	data, err := os.ReadFile(path)
@@ -113,12 +137,4 @@ func (c *Config) validate() error {
 		}
 	}
 	return nil
-}
-
-// KeyFile returns the expected path of a platform's key env file, or "".
-func (c *Config) KeyFile(p *Platform) string {
-	if c.KeysDir == "" {
-		return ""
-	}
-	return c.KeysDir + "/" + p.Name + ".env"
 }

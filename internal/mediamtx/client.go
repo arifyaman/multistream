@@ -1,6 +1,8 @@
-package main
+// Package mediamtx is a minimal client for the mediamtx v1 Control API.
+package mediamtx
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,23 +13,26 @@ import (
 	"time"
 )
 
-const apiTimeout = 3 * time.Second
+// defaultTimeout bounds every Control API request.
+const defaultTimeout = 3 * time.Second
 
-// mmtxClient talks to the mediamtx Control API.
-type mmtxClient struct {
+// Client talks to the mediamtx Control API.
+type Client struct {
 	base string
 	http *http.Client
 }
 
-func newMediaMTXClient(base string) *mmtxClient {
-	return &mmtxClient{
+// NewClient builds a Client for the given API base URL
+// (e.g. "http://127.0.0.1:9997").
+func NewClient(base string) *Client {
+	return &Client{
 		base: strings.TrimRight(base, "/"),
-		http: &http.Client{Timeout: apiTimeout},
+		http: &http.Client{Timeout: defaultTimeout},
 	}
 }
 
-// mmtxPath mirrors the mediamtx v3 API Path object (fields we use).
-type mmtxPath struct {
+// Path mirrors the mediamtx v1 API Path object (fields we use).
+type Path struct {
 	Name          string `json:"name"`
 	Online        bool   `json:"online"`
 	OnlineTime    string `json:"onlineTime"`
@@ -55,7 +60,7 @@ type IngestInfo struct {
 }
 
 // Info normalizes a path into the report's ingest fields.
-func (p *mmtxPath) Info() IngestInfo {
+func (p *Path) Info() IngestInfo {
 	info := IngestInfo{
 		Online:       p.Online,
 		InboundBytes: p.InboundBytes,
@@ -83,8 +88,32 @@ func (p *mmtxPath) Info() IngestInfo {
 	return info
 }
 
-func (c *mmtxClient) get(path string, v interface{}) error {
-	resp, err := c.http.Get(c.base + path)
+// GetPath fetches a single path. Returns an error on 404 (not published).
+func (c *Client) GetPath(ctx context.Context, name string) (*Path, error) {
+	var p Path
+	if err := c.get(ctx, "/v3/paths/get/"+url.PathEscape(name), &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// Version returns the mediamtx version string (for the check command).
+func (c *Client) Version(ctx context.Context) (string, error) {
+	var v struct {
+		Version string `json:"version"`
+	}
+	if err := c.get(ctx, "/v3/info", &v); err != nil {
+		return "", err
+	}
+	return v.Version, nil
+}
+
+func (c *Client) get(ctx context.Context, path string, v interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
 	}
@@ -97,26 +126,6 @@ func (c *mmtxClient) get(path string, v interface{}) error {
 		return fmt.Errorf("mediamtx API %s: HTTP %d: %s", path, resp.StatusCode, truncate(string(body), 120))
 	}
 	return json.Unmarshal(body, v)
-}
-
-// GetPath fetches a single path. Returns an error on 404 (not published).
-func (c *mmtxClient) GetPath(name string) (*mmtxPath, error) {
-	var p mmtxPath
-	if err := c.get("/v3/paths/get/"+url.PathEscape(name), &p); err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
-// Version returns the mediamtx version string (for `check`).
-func (c *mmtxClient) Version() (string, error) {
-	var v struct {
-		Version string `json:"version"`
-	}
-	if err := c.get("/v3/info", &v); err != nil {
-		return "", err
-	}
-	return v.Version, nil
 }
 
 func truncate(s string, n int) string {

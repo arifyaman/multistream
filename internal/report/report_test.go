@@ -1,7 +1,6 @@
-package main
+package report
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +18,7 @@ func TestStatusReportJSON(t *testing.T) {
 		Resolution: "1920x1080", VideoCodec: "H264", AudioCodec: "MPEG-4 Audio", OnlineSince: &since}
 	r.Platforms = []PlatformStatus{healthyPlatform("twitch"), healthyPlatform("kick")}
 
-	b, err := json.Marshal(r)
+	b, err := r.JSON()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,14 +58,14 @@ func TestStatusReportEvents(t *testing.T) {
 	}
 }
 
-func TestRenderTableAllUp(t *testing.T) {
+func TestRenderAllUp(t *testing.T) {
 	since := time.Now().Add(-114 * time.Minute)
 	r := &StatusReport{Time: time.Now(), ExpectedReaders: 2, OK: true}
 	r.Ingest = IngestStatus{Online: true, Kbps: 6020, Readers: 2,
 		Resolution: "1920x1080", VideoCodec: "H264", AudioCodec: "MPEG-4 Audio", OnlineSince: &since}
 	r.Platforms = []PlatformStatus{healthyPlatform("twitch"), healthyPlatform("kick")}
 
-	out := renderTable(r, false)
+	out := r.Render(false)
 	for _, want := range []string{
 		"ingest", "6.02 Mbps", "1920x1080 h264", "mpeg-4 audio", "readers 2/2",
 		"up 1h54m", "twitch", "connected, restarts 0", "kick",
@@ -77,7 +76,7 @@ func TestRenderTableAllUp(t *testing.T) {
 	}
 }
 
-func TestRenderTableDegraded(t *testing.T) {
+func TestRenderDegraded(t *testing.T) {
 	r := &StatusReport{Time: time.Now(), ExpectedReaders: 1, OK: false}
 	r.Ingest = IngestStatus{Online: false}
 	r.Platforms = []PlatformStatus{
@@ -86,7 +85,7 @@ func TestRenderTableDegraded(t *testing.T) {
 		{Name: "youtube", UnitExists: true, Active: "active", Sub: "running", PID: 5},
 	}
 
-	out := renderTable(r, false)
+	out := r.Render(false)
 	for _, want := range []string{
 		"no publisher",
 		"failed/failed, restarts 3, connection refused",
@@ -99,14 +98,29 @@ func TestRenderTableDegraded(t *testing.T) {
 	}
 }
 
-func TestRenderTableAPIError(t *testing.T) {
+func TestRenderAPIError(t *testing.T) {
 	r := &StatusReport{Time: time.Now(), ExpectedReaders: 1, OK: false}
 	r.Ingest = IngestStatus{APIError: "mediamtx API /v3/paths/get/live/x: HTTP 500"}
 	r.Platforms = []PlatformStatus{healthyPlatform("twitch")}
 
-	out := renderTable(r, false)
+	out := r.Render(false)
 	if !strings.Contains(out, "api error:") {
 		t.Errorf("table missing api error:\n%s", out)
+	}
+}
+
+func TestRenderColor(t *testing.T) {
+	r := &StatusReport{Time: time.Now(), ExpectedReaders: 1, OK: true}
+	r.Ingest = IngestStatus{Online: true, Readers: 1}
+	r.Platforms = []PlatformStatus{healthyPlatform("twitch")}
+
+	plain := r.Render(false)
+	colored := r.Render(true)
+	if strings.Contains(plain, "\x1b[") {
+		t.Error("plain render must not contain ANSI codes")
+	}
+	if !strings.Contains(colored, cGreen) || !strings.Contains(colored, cReset) {
+		t.Error("colored render must contain green state")
 	}
 }
 

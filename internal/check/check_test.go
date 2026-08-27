@@ -1,8 +1,6 @@
-package main
+package check
 
-import (
-	"testing"
-)
+import "testing"
 
 func TestParsePushURL(t *testing.T) {
 	cases := []struct {
@@ -12,6 +10,7 @@ func TestParsePushURL(t *testing.T) {
 	}{
 		{"rtmp://eun10.contribute.live-video.net/app/KEY", "eun10.contribute.live-video.net", 1935},
 		{"rtmps://kick-cdn.example.com/KEY", "kick-cdn.example.com", 443},
+		{"rtmps://kick-cdn.example.com//KEY", "kick-cdn.example.com", 443},
 		{"rtmp://a.rtmp.youtube.com:1935/live2/NAME", "a.rtmp.youtube.com", 1935},
 		{"rtmp://live.kick.com:9443/KEY", "live.kick.com", 9443},
 		{"http://example.com", "example.com", 1935},

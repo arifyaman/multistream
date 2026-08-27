@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"os"
@@ -76,18 +76,29 @@ func TestLoadConfigDefaultsApplied(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigPaths(t *testing.T) {
+	t.Setenv("MULTISTREAM_CONFIG", "/custom/path.json")
+	paths := DefaultConfigPaths()
+	if paths[0] != "/custom/path.json" {
+		t.Errorf("env override not first: %v", paths)
+	}
+	if len(paths) != 3 {
+		t.Errorf("want 3 candidates, got %v", paths)
+	}
+}
+
 func TestLoadConfigErrors(t *testing.T) {
 	cases := map[string]string{
-		"empty object":            `{}`,
-		"bad api scheme":          `{"mediamtx_api":"ftp://x","ingest_path":"a","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
-		"api without host":        `{"mediamtx_api":"http://","ingest_path":"a","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
-		"missing ingest path":     `{"mediamtx_api":"http://127.0.0.1:9997","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
-		"no platforms":            `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[]}`,
-		"missing platform name":   `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"unit":"u","push_url":"rtmp://h/p"}]}`,
-		"missing platform unit":   `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","push_url":"rtmp://h/p"}]}`,
-		"missing push url":        `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","unit":"u"}]}`,
-		"duplicate platform name": `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","unit":"u1","push_url":"rtmp://h/p"},{"name":"a","unit":"u2","push_url":"rtmp://h/p"}]}`,
-		"invalid json":            `{not json`,
+		"empty object":          `{}`,
+		"bad api scheme":        `{"mediamtx_api":"ftp://x","ingest_path":"a","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
+		"api without host":      `{"mediamtx_api":"http://","ingest_path":"a","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
+		"missing ingest path":   `{"mediamtx_api":"http://127.0.0.1:9997","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
+		"no platforms":          `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[]}`,
+		"missing platform name": `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"unit":"u","push_url":"rtmp://h/p"}]}`,
+		"missing platform unit": `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","push_url":"rtmp://h/p"}]}`,
+		"missing push url":      `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","unit":"u"}]}`,
+		"duplicate names":       `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","unit":"u1","push_url":"rtmp://h/p"},{"name":"a","unit":"u2","push_url":"rtmp://h/p"}]}`,
+		"invalid json":          `{not json`,
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {

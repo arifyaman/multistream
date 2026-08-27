@@ -1,13 +1,23 @@
-package main
+// Package report assembles the full status picture (ingest + platforms)
+// and renders it as a terminal table or JSON.
+package report
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/xlip/multistream/internal/config"
+	"github.com/xlip/multistream/internal/mediamtx"
+	"github.com/xlip/multistream/internal/netmon"
+	"github.com/xlip/multistream/internal/systemd"
 )
 
+// sampleInterval is the double-sample window used to measure ingest
+// bitrate on the first (one-shot) collect.
 const sampleInterval = time.Second
 
 // IngestStatus is the normalized state of the OBS -> mediamtx link.
@@ -56,23 +66,23 @@ type StatusReport struct {
 
 // Collector keeps sampling state between Collect calls (bitrate deltas).
 type Collector struct {
-	cfg       *Config
-	client    *mmtxClient
+	cfg       *config.Config
+	client    *mediamtx.Client
 	lastBytes uint64
 	lastTime  time.Time
 }
 
 // NewCollector builds a Collector for the given config.
-func NewCollector(cfg *Config) *Collector {
-	return &Collector{cfg: cfg, client: newMediaMTXClient(cfg.MediaMTXAPI)}
+func NewCollector(cfg *config.Config) *Collector {
+	return &Collector{cfg: cfg, client: mediamtx.NewClient(cfg.MediaMTXAPI)}
 }
 
 // Collect takes one snapshot of the whole chain.
-func (c *Collector) Collect() (*StatusReport, error) {
+func (c *Collector) Collect(ctx context.Context) (*StatusReport, error) {
 	rep := &StatusReport{Time: time.Now(), ExpectedReaders: len(c.cfg.Platforms)}
-	c.collectIngest(rep)
+	c.collectIngest(ctx, rep)
 	for _, p := range c.cfg.Platforms {
-		rep.Platforms = append(rep.Platforms, c.collectPlatform(p))
+		rep.Platforms = append(rep.Platforms, c.collectPlatform(ctx, p))
 	}
 	rep.OK = rep.Ingest.APIError == "" && rep.Ingest.Online &&
 		rep.Ingest.Readers >= rep.ExpectedReaders
@@ -84,8 +94,8 @@ func (c *Collector) Collect() (*StatusReport, error) {
 	return rep, nil
 }
 
-func (c *Collector) collectIngest(rep *StatusReport) {
-	path, err := c.client.GetPath(c.cfg.IngestPath)
+func (c *Collector) collectIngest(ctx context.Context, rep *StatusReport) {
+	path, err := c.client.GetPath(ctx, c.cfg.IngestPath)
 	if err != nil {
 		rep.Ingest.APIError = err.Error()
 		return
@@ -108,7 +118,7 @@ func (c *Collector) collectIngest(rep *StatusReport) {
 	now := time.Now()
 	if c.lastTime.IsZero() {
 		time.Sleep(sampleInterval)
-		if path2, err2 := c.client.GetPath(c.cfg.IngestPath); err2 == nil {
+		if path2, err2 := c.client.GetPath(ctx, c.cfg.IngestPath); err2 == nil {
 			info2 := path2.Info()
 			rep.Ingest.Bytes = info2.InboundBytes
 			if d := int64(info2.InboundBytes - info.InboundBytes); d > 0 {
@@ -125,9 +135,9 @@ func (c *Collector) collectIngest(rep *StatusReport) {
 	c.lastTime = now
 }
 
-func (c *Collector) collectPlatform(p Platform) PlatformStatus {
+func (c *Collector) collectPlatform(ctx context.Context, p config.Platform) PlatformStatus {
 	ps := PlatformStatus{Name: p.Name, Unit: p.Unit}
-	st, err := QueryUnit(p.Unit)
+	st, err := systemd.QueryUnit(ctx, p.Unit)
 	if err != nil {
 		ps.UnitError = err.Error()
 		return ps
@@ -138,7 +148,7 @@ func (c *Collector) collectPlatform(p Platform) PlatformStatus {
 	ps.Restarts = st.Restarts
 	ps.PID = st.PID
 	if st.Exists && st.Active == "active" && st.Sub == "running" {
-		ok, err := PIDConnectedTo(st.PID, "127.0.0.1", c.cfg.IngestPort)
+		ok, err := netmon.PIDConnectedTo(st.PID, "127.0.0.1", c.cfg.IngestPort)
 		if err != nil {
 			ps.ConnErr = err.Error()
 		} else {
@@ -146,7 +156,7 @@ func (c *Collector) collectPlatform(p Platform) PlatformStatus {
 		}
 	}
 	if st.Exists && !(st.Active == "active" && st.Sub == "running") {
-		ps.LastError = LastUnitError(p.Unit)
+		ps.LastError = systemd.LastUnitError(ctx, p.Unit)
 	}
 	return ps
 }
@@ -198,8 +208,8 @@ func downReason(p PlatformStatus) string {
 	}
 }
 
-// renderTable renders the report as a plain text table.
-func renderTable(r *StatusReport, color bool) string {
+// Render renders the report as a plain text table.
+func (r *StatusReport) Render(color bool) string {
 	var b strings.Builder
 	width := 8
 	for _, p := range r.Platforms {
@@ -263,6 +273,11 @@ func renderTable(r *StatusReport, color bool) string {
 	return b.String()
 }
 
+// JSON renders the report as indented JSON.
+func (r *StatusReport) JSON() ([]byte, error) {
+	return json.Marshal(r)
+}
+
 func platformDetail(p PlatformStatus) string {
 	if !p.UnitExists {
 		return "unit not found"
@@ -315,8 +330,9 @@ const (
 	cReset = "\x1b[0m"
 )
 
-// colorEnabled reports whether ANSI colors should be used on stdout.
-func colorEnabled(noColorFlag bool) bool {
+// ColorEnabled reports whether ANSI colors should be used on stdout:
+// enabled unless --no-color, $NO_COLOR is set, or stdout is not a TTY.
+func ColorEnabled(noColorFlag bool) bool {
 	if noColorFlag {
 		return false
 	}
@@ -328,18 +344,4 @@ func colorEnabled(noColorFlag bool) bool {
 		return false
 	}
 	return st.Mode()&os.ModeCharDevice != 0
-}
-
-func printJSON(r *StatusReport) {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	enc.Encode(r)
-}
-
-func printJSONLine(r *StatusReport) {
-	b, err := json.Marshal(r)
-	if err != nil {
-		return
-	}
-	fmt.Println(string(b))
 }

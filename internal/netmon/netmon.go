@@ -1,4 +1,7 @@
-package main
+// Package netmon inspects /proc to determine whether a process holds an
+// established TCP connection to a given address. This is how the CLI tells
+// "the ffmpeg process is alive" from "it is actually pulling from mediamtx".
+package netmon
 
 import (
 	"fmt"
@@ -69,8 +72,7 @@ func establishedRemoteInodes(remoteIP string, remotePort int) (map[uint64]bool, 
 }
 
 // PIDConnectedTo reports whether pid holds an ESTABLISHED TCP connection
-// to remoteIP:remotePort. It is how the CLI tells "ffmpeg is alive" from
-// "ffmpeg is actually pulling from mediamtx".
+// to remoteIP:remotePort.
 func PIDConnectedTo(pid int, remoteIP string, remotePort int) (bool, error) {
 	if pid <= 0 {
 		return false, nil
