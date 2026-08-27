@@ -2,11 +2,23 @@ package mediamtx
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+// writeJSON writes a canned API response, recording errors on t.
+func writeJSON(t *testing.T, w http.ResponseWriter, status int, body string) {
+	t.Helper()
+	if status != 0 {
+		w.WriteHeader(status)
+	}
+	if _, err := io.WriteString(w, body); err != nil {
+		t.Errorf("write response: %v", err)
+	}
+}
 
 const pathBody = `{
   "name": "live/test",
@@ -31,7 +43,7 @@ func TestGetPathInfo(t *testing.T) {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(pathBody))
+		writeJSON(t, w, 0, pathBody)
 	}))
 	defer srv.Close()
 
@@ -67,8 +79,7 @@ func TestGetPathInfo(t *testing.T) {
 
 func TestGetPathNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error":"path not found","status":404}`))
+		writeJSON(t, w, http.StatusNotFound, `{"error":"path not found","status":404}`)
 	}))
 	defer srv.Close()
 
@@ -90,7 +101,7 @@ func TestVersion(t *testing.T) {
 		if r.URL.Path != "/v3/info" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
-		w.Write([]byte(`{"started":"2026-08-27T20:00:00Z","version":"v1.20.1"}`))
+		writeJSON(t, w, 0, `{"started":"2026-08-27T20:00:00Z","version":"v1.20.1"}`)
 	}))
 	defer srv.Close()
 
@@ -114,7 +125,7 @@ func TestInfoNoVideoTrack(t *testing.T) {
 	  ]
 	}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(body))
+		writeJSON(t, w, 0, body)
 	}))
 	defer srv.Close()
 
