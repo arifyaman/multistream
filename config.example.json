@@ -1,0 +1,24 @@
+{
+  "mediamtx_api": "http://127.0.0.1:9997",
+  "ingest_path": "live/REPLACE_WITH_YOUR_LONG_RANDOM_STREAM_NAME",
+  "ingest_port": 1935,
+  "refresh_sec": 2,
+  "keys_dir": "/etc/multistream/keys",
+  "platforms": [
+    {
+      "name": "twitch",
+      "unit": "multistream-twitch",
+      "push_url": "rtmp://live.twitch.tv/app/${TWITCH_KEY}"
+    },
+    {
+      "name": "kick",
+      "unit": "multistream-kick",
+      "push_url": "rtmp://live.kick.com/${KICK_KEY}"
+    },
+    {
+      "name": "youtube",
+      "unit": "multistream-youtube",
+      "push_url": "rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_STREAM_NAME}"
+    }
+  ]
+}
