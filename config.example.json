@@ -13,7 +13,7 @@
     {
       "name": "kick",
       "unit": "multistream-kick",
-      "push_url": "rtmp://live.kick.com/${KICK_KEY}"
+      "push_url": "rtmp://live.kick.com//${KICK_KEY}"
     },
     {
       "name": "youtube",

@@ -72,7 +72,7 @@ JSON file, searched in this order:
   "mediamtx_api": "http://127.0.0.1:9997",
   "ingest_path": "live/REPLACE_WITH_YOUR_LONG_RANDOM_STREAM_NAME",
   "ingest_port": 1935,
-  "refresh": 2,
+  "refresh_sec": 2,
   "keys_dir": "/etc/multistream/keys",
   "platforms": [
     { "name": "twitch", "unit": "multistream-twitch",
