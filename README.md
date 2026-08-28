@@ -45,18 +45,15 @@ go build -trimpath \
 
 ## Install
 
-**npm** (downloaded prebuilt binary, SHA-256 verified at install time):
+Prebuilt binaries for linux/darwin/windows (amd64/arm64) are attached to
+every [GitHub release](https://github.com/arifyaman/multiStream/releases):
 
 ```
-npm install -g @arifyaman/multistream
-```
-
-**Binary** (any OS/arch, or from the [GitHub releases](https://github.com/xlip/multiStream/releases)):
-
-```
-curl -LO https://github.com/xlip/multiStream/releases/download/v2027.1.0-alpha.1/multistream_2027.1.0-alpha.1_linux_amd64
+curl -LO https://github.com/arifyaman/multiStream/releases/download/v2027.1.0-alpha.1/multistream_2027.1.0-alpha.1_linux_amd64
 install -m755 multistream_2027.1.0-alpha.1_linux_amd64 /usr/local/bin/multistream
 ```
+
+Or build from source (Go >= 1.22, no external deps): `make build`
 
 ## Configuration
 
@@ -142,14 +139,12 @@ internal/report/       status collection, table/JSON rendering
 internal/check/        deployment probe
 internal/systemd/      systemctl wrappers
 internal/version/      build metadata (-ldflags)
-npm/                   npm wrapper (postinstall binary download)
 ```
 
 Conventions: stdlib only, no external Go modules; `golangci-lint`
 (errcheck, staticcheck, goimports with local prefix); tests must pass
-`-race`. CI runs on push/PR; tags `v*` produce GitHub releases
-(raw binaries + tarballs + SHA256SUMS) and, when the `NPM_TOKEN` secret is
-set, publish `@arifyaman/multistream` to npm.
+`-race`. CI runs on push/PR; tags `v*` produce a GitHub release with
+per-platform raw binaries, tarballs and SHA256SUMS.
 
 ## License
 
