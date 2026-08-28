@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write
+  # Required for npm trusted publishing (OIDC identity, no token needed)
+  id-token: write
 
 jobs:
   build:
@@ -95,18 +97,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  gate:
-    runs-on: ubuntu-latest
-    outputs:
-      npm: ${{ steps.check.outputs.npm }}
-    steps:
-      - id: check
-        run: echo "npm=${{ secrets.NPM_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
-
   npm:
     runs-on: ubuntu-latest
-    needs: [gate, release]
-    if: needs.gate.outputs.npm == 'true'
+    needs: release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -130,15 +123,18 @@ jobs:
           cp npm/bin/multistream.js stage/bin/multistream.js
           cp npm/README.md stage/README.md
       - name: Pack and publish
+        # Auth via npm trusted publishing (OIDC): no token, the runner's
+        # identity is verified by npm against the trusted publisher config
+        # (npmjs.com -> Publishing -> Trusted publishers).
         run: |
           cd stage
           npm pack
           # Pre-release tags (vX.Y.Z-*) go to the "alpha" dist-tag so plain
           # "npm install" keeps resolving the latest stable version.
           if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
-            npm publish --access public --tag alpha
+            npm publish --access public --provenance --tag alpha
           else
-            npm publish --access public
+            npm publish --access public --provenance
           fi
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
