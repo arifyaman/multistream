@@ -26,13 +26,15 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           commit="${GITHUB_SHA::7}"
           date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          ext=""
-          [ "$goos" = "windows" ] && ext=".exe"
-          asset="multistream_${version}_${goos}_${goarch}"
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; else ext=""; fi
+          asset="multistream_${version}_${GOOS}_${GOARCH}"
           work="build/${asset}"
           mkdir -p "$work" sha256sums
           CGO_ENABLED=0 go build -trimpath \
@@ -46,7 +48,7 @@ jobs:
           tar -czf "dist/${asset}.tar.gz" "$work"
           mv "$work/multistream${ext}" "dist/${asset}${ext}"
           hash="$(sha256sum "dist/${asset}${ext}" | awk '{print $1}')"
-          printf '%s  %s\n' "$hash" "${asset}${ext}" > "sha256sums/SHA256SUMS-${goos}_${goarch}.txt"
+          printf '%s  %s\n' "$hash" "${asset}${ext}" > "sha256sums/SHA256SUMS-${GOOS}_${GOARCH}.txt"
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
