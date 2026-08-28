@@ -49,16 +49,19 @@ jobs:
           mv "$work/multistream${ext}" "dist/${asset}${ext}"
           hash="$(sha256sum "dist/${asset}${ext}" | awk '{print $1}')"
           printf '%s  %s\n' "$hash" "${asset}${ext}" > "sha256sums/SHA256SUMS-${GOOS}_${GOARCH}.txt"
+      # Unique artifact names per platform: same-name uploads from parallel
+      # matrix jobs do not reliably merge, so consumers download with
+      # pattern + merge-multiple instead.
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: dist
+          name: dist-${{ matrix.goos }}_${{ matrix.goarch }}
           path: dist/*
           if-no-files-found: error
       - name: Upload checksums
         uses: actions/upload-artifact@v4
         with:
-          name: sha256sums
+          name: sha256sums-${{ matrix.goos }}_${{ matrix.goarch }}
           path: sha256sums/*
           if-no-files-found: error
 
@@ -69,7 +72,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: dist
+          pattern: dist-*
+          merge-multiple: true
           path: dist
       - name: Clear stale releases for this tag
         # Draft releases from aborted runs survive tag deletion and make
@@ -111,7 +115,8 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - uses: actions/download-artifact@v4
         with:
-          name: sha256sums
+          pattern: sha256sums-*
+          merge-multiple: true
           path: sha256sums
       - name: Stage package
         run: |
