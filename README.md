@@ -48,7 +48,7 @@ go build -trimpath \
 **npm** (downloaded prebuilt binary, SHA-256 verified at install time):
 
 ```
-npm install -g @xlip/multistream
+npm install -g @arifyaman/multistream
 ```
 
 **Binary** (any OS/arch, or from the [GitHub releases](https://github.com/xlip/multiStream/releases)):
@@ -149,7 +149,7 @@ Conventions: stdlib only, no external Go modules; `golangci-lint`
 (errcheck, staticcheck, goimports with local prefix); tests must pass
 `-race`. CI runs on push/PR; tags `v*` produce GitHub releases
 (raw binaries + tarballs + SHA256SUMS) and, when the `NPM_TOKEN` secret is
-set, publish `@xlip/multistream` to npm.
+set, publish `@arifyaman/multistream` to npm.
 
 ## License
 

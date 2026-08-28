@@ -12,7 +12,7 @@ const binPath = path.join(__dirname, binName);
 
 if (!fs.existsSync(binPath)) {
   console.error(`multistream: binary not found at ${binPath}`);
-  console.error('multistream: re-run "npm rebuild @xlip/multistream" or install the binary manually');
+  console.error('multistream: re-run "npm rebuild @arifyaman/multistream" or install the binary manually');
   process.exit(2);
 }
 

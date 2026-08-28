@@ -1,4 +1,4 @@
-# @xlip/multistream
+# @arifyaman/multistream
 
 npm wrapper for the [multistream](https://github.com/xlip/multiStream) CLI:
 a terminal status monitor for the OBS -> mediamtx -> platforms RTMP
@@ -6,7 +6,7 @@ re-broadcast chain.
 
 ## Install
 
-    npm install -g @xlip/multistream
+    npm install -g @arifyaman/multistream
 
 The postinstall step downloads the prebuilt binary for your platform from
 the GitHub release and verifies its SHA-256 checksum before installing it.

@@ -1,16 +1,17 @@
 // Build the npm package.json for a release from the SHA256SUMS file.
-// Usage: node make-package.mjs <version> <path-to-SHA256SUMS>
+// Usage: node make-package.mjs <version> <path-to-SHA256SUMS> [releases-base-url] [owner/repo]
 // The resulting package.json is written to stdout.
 
 import { readFileSync } from 'node:fs';
 
-const [version, sumsPath] = process.argv.slice(2);
+const [version, sumsPath, releasesBase, repo] = process.argv.slice(2);
 if (!version || !sumsPath) {
-  console.error('usage: make-package.mjs <version> <SHA256SUMS>');
+  console.error('usage: make-package.mjs <version> <SHA256SUMS> [releases-base-url] [owner/repo]');
   process.exit(2);
 }
 
-const base = `https://github.com/xlip/multiStream/releases/download/v${version}`;
+const base = `${(releasesBase || 'https://github.com/arifyaman/multiStream/releases').replace(/\/$/, '')}/download/v${version}`;
+const repository = repo ? `github:${repo}` : 'github:arifyaman/multiStream';
 
 // "<os>_<arch>" (asset suffix) -> npm platform key
 const map = {
@@ -33,11 +34,11 @@ for (const line of readFileSync(sumsPath, 'utf8').trim().split('\n')) {
 }
 
 const pkg = {
-  name: '@xlip/multistream',
+  name: '@arifyaman/multistream',
   version,
   description: 'CLI status monitor for the multistream RTMP re-broadcast chain (OBS -> mediamtx -> platforms)',
   license: 'MIT',
-  repository: 'github:xlip/multistream',
+  repository,
   os: ['linux', 'darwin', 'win32'],
   cpu: ['x64', 'arm64'],
   engines: { node: '>=18' },

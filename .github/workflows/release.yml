@@ -104,7 +104,9 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           mkdir -p stage/bin
           cat sha256sums/SHA256SUMS-*.txt | sort > sha256sums/SHA256SUMS.txt
-          node npm/make-package.mjs "$version" sha256sums/SHA256SUMS.txt > stage/package.json
+          node npm/make-package.mjs "$version" sha256sums/SHA256SUMS.txt \
+            "${{ github.server_url }}/${{ github.repository }}/releases" \
+            "${{ github.repository }}" > stage/package.json
           cp npm/install.js stage/install.js
           cp npm/bin/multistream.js stage/bin/multistream.js
           cp npm/README.md stage/README.md
