@@ -71,14 +71,23 @@ jobs:
         with:
           name: dist
           path: dist
+      - name: Clear stale releases for this tag
+        # Draft releases from aborted runs survive tag deletion and make
+        # action-gh-release fail with "already_exists"; remove them first.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ids="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name==\"${GITHUB_REF_NAME}\") | .id] | join(\" \")")"
+          for id in $ids; do
+            echo "Deleting stale release ${id}"
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${id}"
+          done
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/multistream_*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          # Leftover drafts for the tag (e.g. from an aborted run) make the
-          # create/update call fail with "already_exists"; clear them first.
-          delete_drafts: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
