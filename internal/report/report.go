@@ -22,15 +22,33 @@ const sampleInterval = time.Second
 
 // IngestStatus is the normalized state of the OBS -> mediamtx link.
 type IngestStatus struct {
-	APIError    string     `json:"api_error,omitempty"`
-	Online      bool       `json:"online"`
-	Kbps        int        `json:"kbps,omitempty"`
-	Bytes       uint64     `json:"bytes_received,omitempty"`
-	Readers     int        `json:"readers"`
-	Resolution  string     `json:"resolution,omitempty"`
-	VideoCodec  string     `json:"video_codec,omitempty"`
-	AudioCodec  string     `json:"audio_codec,omitempty"`
-	OnlineSince *time.Time `json:"online_since,omitempty"`
+	APIError       string     `json:"api_error,omitempty"`
+	Online         bool       `json:"online"`
+	Available      bool       `json:"available"`
+	Kbps           int        `json:"kbps,omitempty"`
+	Bytes          uint64     `json:"bytes_received,omitempty"`
+	Readers        int        `json:"readers"`
+	Resolution     string     `json:"resolution,omitempty"`
+	VideoCodec     string     `json:"video_codec,omitempty"`
+	AudioCodec     string     `json:"audio_codec,omitempty"`
+	OnlineSince    *time.Time `json:"online_since,omitempty"`
+	AvailableSince *time.Time `json:"available_since,omitempty"`
+}
+
+// State returns the ingest line state: "live" (a real publisher is
+// connected), "away" (readable, but only the offline away segment is
+// playing) or "down" (API error, or nothing to read).
+func (s IngestStatus) State() string {
+	switch {
+	case s.APIError != "":
+		return "down"
+	case s.Online:
+		return "live"
+	case s.Available:
+		return "away"
+	default:
+		return "down"
+	}
 }
 
 // PlatformStatus is the normalized state of one re-broadcaster.
@@ -84,7 +102,9 @@ func (c *Collector) Collect(ctx context.Context) (*StatusReport, error) {
 	for _, p := range c.cfg.Platforms {
 		rep.Platforms = append(rep.Platforms, c.collectPlatform(ctx, p))
 	}
-	rep.OK = rep.Ingest.APIError == "" && rep.Ingest.Online &&
+	// Healthy means the ingest path can be read - live, or the away
+	// segment when off-air - and every platform is pulling.
+	rep.OK = rep.Ingest.APIError == "" && rep.Ingest.Available &&
 		rep.Ingest.Readers >= rep.ExpectedReaders
 	for _, ps := range rep.Platforms {
 		if !ps.Good() {
@@ -102,6 +122,7 @@ func (c *Collector) collectIngest(ctx context.Context, rep *StatusReport) {
 	}
 	info := path.Info()
 	rep.Ingest.Online = info.Online
+	rep.Ingest.Available = info.Available
 	rep.Ingest.Readers = info.Readers
 	rep.Ingest.Resolution = info.Resolution
 	rep.Ingest.VideoCodec = info.VideoCodec
@@ -110,6 +131,10 @@ func (c *Collector) collectIngest(ctx context.Context, rep *StatusReport) {
 	if !info.OnlineSince.IsZero() {
 		ts := info.OnlineSince
 		rep.Ingest.OnlineSince = &ts
+	}
+	if !info.AvailableSince.IsZero() {
+		ts := info.AvailableSince
+		rep.Ingest.AvailableSince = &ts
 	}
 
 	// Bitrate = delta of inbound bytes. First call samples twice so a
@@ -169,10 +194,13 @@ func (r *StatusReport) Events(prev *StatusReport) []string {
 	}
 	var out []string
 	now := time.Now().Format("15:04:05")
-	if prev.Ingest.Online != r.Ingest.Online {
-		if r.Ingest.Online {
+	if st := r.Ingest.State(); prev.Ingest.State() != st {
+		switch st {
+		case "live":
 			out = append(out, fmt.Sprintf("%s ingest PUBLISHING", now))
-		} else {
+		case "away":
+			out = append(out, fmt.Sprintf("%s ingest AWAY (offline segment, waiting for publisher)", now))
+		default:
 			out = append(out, fmt.Sprintf("%s ingest DROPPED", now))
 		}
 	}
@@ -224,6 +252,8 @@ func (r *StatusReport) Render(color bool) string {
 		switch s {
 		case "UP":
 			return cGreen + s + cReset
+		case "AWAY":
+			return cYellow + s + cReset
 		case "DOWN":
 			return cRed + s + cReset
 		}
@@ -234,32 +264,18 @@ func (r *StatusReport) Render(color bool) string {
 	}
 
 	i := r.Ingest
-	ingSt, ingDetail := "UP", ""
-	switch {
-	case i.APIError != "":
-		ingSt, ingDetail = "DOWN", "api error: "+i.APIError
-	case !i.Online:
-		ingSt, ingDetail = "DOWN", "no publisher"
-	default:
-		var parts []string
-		if i.Kbps > 0 {
-			parts = append(parts, fmtKbps(i.Kbps))
+	ingSt, ingDetail := "DOWN", "no publisher"
+	switch i.State() {
+	case "live":
+		ingSt = "UP"
+		ingDetail = ingestDetail(i, r.ExpectedReaders, "up", i.OnlineSince)
+	case "away":
+		ingSt = "AWAY"
+		ingDetail = ingestDetail(i, r.ExpectedReaders, "away", i.AvailableSince)
+	case "down":
+		if i.APIError != "" {
+			ingDetail = "api error: " + i.APIError
 		}
-		if i.Resolution != "" {
-			res := i.Resolution
-			if i.VideoCodec != "" {
-				res += " " + strings.ToLower(i.VideoCodec)
-			}
-			parts = append(parts, res)
-		}
-		if i.AudioCodec != "" {
-			parts = append(parts, strings.ToLower(i.AudioCodec))
-		}
-		parts = append(parts, fmt.Sprintf("readers %d/%d", i.Readers, r.ExpectedReaders))
-		if i.OnlineSince != nil {
-			parts = append(parts, "up "+humanDuration(time.Since(*i.OnlineSince)))
-		}
-		ingDetail = strings.Join(parts, "  ")
 	}
 	row("ingest", ingSt, ingDetail)
 
@@ -276,6 +292,31 @@ func (r *StatusReport) Render(color bool) string {
 // JSON renders the report as indented JSON.
 func (r *StatusReport) JSON() ([]byte, error) {
 	return json.Marshal(r)
+}
+
+// ingestDetail assembles the detail column of the ingest row for a
+// readable path (live or away). sinceLabel/since render how long the
+// current source has been feeding the path ("up" live, "away" offline).
+func ingestDetail(i IngestStatus, expectedReaders int, sinceLabel string, since *time.Time) string {
+	var parts []string
+	if i.Kbps > 0 {
+		parts = append(parts, fmtKbps(i.Kbps))
+	}
+	if i.Resolution != "" {
+		res := i.Resolution
+		if i.VideoCodec != "" {
+			res += " " + strings.ToLower(i.VideoCodec)
+		}
+		parts = append(parts, res)
+	}
+	if i.AudioCodec != "" {
+		parts = append(parts, strings.ToLower(i.AudioCodec))
+	}
+	parts = append(parts, fmt.Sprintf("readers %d/%d", i.Readers, expectedReaders))
+	if since != nil {
+		parts = append(parts, sinceLabel+" "+humanDuration(time.Since(*since)))
+	}
+	return strings.Join(parts, "  ")
 }
 
 func platformDetail(p PlatformStatus) string {
@@ -325,9 +366,10 @@ func humanDuration(d time.Duration) string {
 }
 
 const (
-	cGreen = "\x1b[32m"
-	cRed   = "\x1b[31m"
-	cReset = "\x1b[0m"
+	cGreen  = "\x1b[32m"
+	cYellow = "\x1b[33m"
+	cRed    = "\x1b[31m"
+	cReset  = "\x1b[0m"
 )
 
 // ColorEnabled reports whether ANSI colors should be used on stdout:

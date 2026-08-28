@@ -59,6 +59,7 @@ func TestLoadConfigDefaultsApplied(t *testing.T) {
 		"ingest_path": "live/test",
 		"ingest_port": 9999,
 		"refresh_sec": 5,
+		"away_file": "/etc/multistream/away.mp4",
 		"keys_dir": "/etc/multistream/keys",
 		"platforms": [
 			{"name": "a", "unit": "u-a", "push_url": "rtmp://h/p"}
@@ -73,6 +74,19 @@ func TestLoadConfigDefaultsApplied(t *testing.T) {
 	}
 	if got := cfg.KeyFile(&cfg.Platforms[0]); got != "/etc/multistream/keys/a.env" {
 		t.Errorf("KeyFile = %q", got)
+	}
+	if cfg.AwayFile != "/etc/multistream/away.mp4" {
+		t.Errorf("away_file = %q", cfg.AwayFile)
+	}
+}
+
+func TestLoadConfigAwayFileOptional(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AwayFile != "" {
+		t.Errorf("away_file = %q, want empty when unset", cfg.AwayFile)
 	}
 }
 
@@ -98,6 +112,7 @@ func TestLoadConfigErrors(t *testing.T) {
 		"missing platform unit": `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","push_url":"rtmp://h/p"}]}`,
 		"missing push url":      `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","unit":"u"}]}`,
 		"duplicate names":       `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","unit":"u1","push_url":"rtmp://h/p"},{"name":"a","unit":"u2","push_url":"rtmp://h/p"}]}`,
+		"relative away file":    `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","away_file":"away.mp4","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
 		"invalid json":          `{not json`,
 	}
 	for name, content := range cases {

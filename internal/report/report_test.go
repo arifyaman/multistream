@@ -14,7 +14,7 @@ func healthyPlatform(name string) PlatformStatus {
 func TestStatusReportJSON(t *testing.T) {
 	since := time.Now().Add(-time.Hour)
 	r := &StatusReport{Time: time.Now(), ExpectedReaders: 2, OK: true}
-	r.Ingest = IngestStatus{Online: true, Kbps: 6000, Readers: 2,
+	r.Ingest = IngestStatus{Online: true, Available: true, Kbps: 6000, Readers: 2,
 		Resolution: "1920x1080", VideoCodec: "H264", AudioCodec: "MPEG-4 Audio", OnlineSince: &since}
 	r.Platforms = []PlatformStatus{healthyPlatform("twitch"), healthyPlatform("kick")}
 
@@ -23,7 +23,8 @@ func TestStatusReportJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(b)
-	for _, want := range []string{`"ok":true`, `"twitch"`, `"connected":true`, `"readers":2`, `"kbps":6000`} {
+	for _, want := range []string{`"ok":true`, `"twitch"`, `"connected":true`, `"readers":2`,
+		`"kbps":6000`, `"online":true`, `"available":true`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("json missing %s: %s", want, s)
 		}
@@ -55,6 +56,44 @@ func TestStatusReportEvents(t *testing.T) {
 	// Nil prev => no events, no panic.
 	if e := cur.Events(nil); e != nil {
 		t.Errorf("want nil events for nil prev, got %v", e)
+	}
+}
+
+func TestEventsAwayTransitions(t *testing.T) {
+	ingest := func(state string) IngestStatus {
+		switch state {
+		case "live":
+			return IngestStatus{Online: true, Available: true}
+		case "away":
+			return IngestStatus{Available: true}
+		default:
+			return IngestStatus{}
+		}
+	}
+	cases := []struct {
+		from, to string
+		want     string
+	}{
+		{"live", "away", "ingest AWAY (offline segment, waiting for publisher)"},
+		{"away", "live", "ingest PUBLISHING"},
+		{"away", "down", "ingest DROPPED"},
+		{"down", "away", "ingest AWAY (offline segment, waiting for publisher)"},
+	}
+	for _, c := range cases {
+		prev := &StatusReport{Ingest: ingest(c.from)}
+		cur := &StatusReport{Ingest: ingest(c.to)}
+		joined := strings.Join(cur.Events(prev), " | ")
+		if !strings.Contains(joined, c.want) {
+			t.Errorf("%s -> %s: want %q, got %q", c.from, c.to, c.want, joined)
+		}
+	}
+	// Same state => no events.
+	if e := ingest("away").State(); e != "away" {
+		t.Fatalf("test setup: want away state, got %q", e)
+	}
+	prev := &StatusReport{Ingest: ingest("away")}
+	if ev := (&StatusReport{Ingest: ingest("away")}).Events(prev); len(ev) != 0 {
+		t.Errorf("want no away->away events, got %v", ev)
 	}
 }
 
@@ -121,6 +160,51 @@ func TestRenderColor(t *testing.T) {
 	}
 	if !strings.Contains(colored, cGreen) || !strings.Contains(colored, cReset) {
 		t.Error("colored render must contain green state")
+	}
+
+	away := &StatusReport{Time: time.Now(), ExpectedReaders: 1, OK: true}
+	away.Ingest = IngestStatus{Available: true, Readers: 1}
+	away.Platforms = []PlatformStatus{healthyPlatform("twitch")}
+	if !strings.Contains(away.Render(true), cYellow) {
+		t.Error("colored away render must contain yellow state")
+	}
+}
+
+func TestIngestState(t *testing.T) {
+	cases := []struct {
+		name string
+		in   IngestStatus
+		want string
+	}{
+		{"api error", IngestStatus{APIError: "boom"}, "down"},
+		{"live", IngestStatus{Online: true, Available: true}, "live"},
+		{"away", IngestStatus{Available: true}, "away"},
+		{"offline", IngestStatus{}, "down"},
+	}
+	for _, c := range cases {
+		if got := c.in.State(); got != c.want {
+			t.Errorf("%s: State() = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestRenderAway(t *testing.T) {
+	since := time.Now().Add(-65 * time.Minute)
+	r := &StatusReport{Time: time.Now(), ExpectedReaders: 2, OK: true}
+	r.Ingest = IngestStatus{Available: true, Kbps: 1200, Readers: 2,
+		Resolution: "1920x1080", VideoCodec: "H264", AudioCodec: "MPEG-4 Audio", AvailableSince: &since}
+	r.Platforms = []PlatformStatus{healthyPlatform("twitch"), healthyPlatform("kick")}
+
+	out := r.Render(false)
+	for _, want := range []string{
+		"AWAY", "1.20 Mbps", "1920x1080 h264", "readers 2/2", "away 1h05m",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("away table missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "up ") {
+		t.Errorf("away table must not show live uptime:\n%s", out)
 	}
 }
 

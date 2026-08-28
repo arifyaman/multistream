@@ -80,8 +80,15 @@ Every line is measured, not guessed:
 
 ## Install
 
-Prebuilt binaries for linux/darwin/windows (amd64/arm64) are attached to
-every [GitHub release](https://github.com/arifyaman/multiStream/releases):
+**npm** (prebuilt binary for your platform, SHA-256 verified at install
+time):
+
+```
+npm install -g @arifyaman/multistream
+```
+
+**Binary** (any OS/arch, or straight from the
+[GitHub releases](https://github.com/arifyaman/multiStream/releases)):
 
 ```
 curl -LO https://github.com/arifyaman/multiStream/releases/download/v2027.1.0-alpha.1/multistream_2027.1.0-alpha.1_linux_amd64
@@ -242,8 +249,8 @@ multistream config
 
 | command | what it does |
 |---|---|
-| `status` | one-shot table (default command). `--watch` keeps refreshing and prints an event line when anything changes (ingest dropped, platform down/up, resolution change). `--json` for machines. |
-| `check` | probe the setup without streaming: mediamtx API reachable + version, each unit exists, each push endpoint is TCP-reachable, each key file exists. Run this after setup. |
+| `status` | one-shot table (default command). `--watch` keeps refreshing and prints an event line when anything changes (ingest dropped, away file playing, platform down/up). `--json` for machines. |
+| `check` | probe the setup without streaming: mediamtx API reachable + version, each unit exists, each push endpoint is TCP-reachable, each key file exists, away file present. Run this after setup. |
 | `restart <platform>` | restart one re-broadcaster (`systemctl restart`). |
 | `config` | print the effective configuration (key values are never read or printed). |
 
@@ -263,6 +270,10 @@ JSON file, searched in this order:
 - `ingest_path` - the path OBS pushes to (must match mediamtx's config).
 - `ingest_port` - RTMP port, default 1935.
 - `refresh_sec` - default `--watch` interval in seconds.
+- `away_file` - optional. The off-air placeholder MP4 that mediamtx loops
+  while no publisher is connected (see [Off-air: the away file](#off-air-the-away-file)).
+  `check` verifies the file exists and that mediamtx is new enough to play
+  it. The file itself is only read by mediamtx, not by `multistream`.
 - `keys_dir` - where the 0600 `<name>.env` key files live. `multistream`
   only checks that they exist; it never reads or prints key values. The
   ffmpeg units load the same files via `EnvironmentFile=`, which is what
@@ -293,6 +304,74 @@ The relay only rewraps - it cannot fix an incompatible source stream:
   as above; partner status raises the bitrate cap.
 - **YouTube:** `rtmp://a.rtmp.youtube.com/live2/<stream_name>` - the "key"
   is a per-stream name from your YouTube dashboard.
+
+## Off-air: the away file
+
+When OBS is not publishing, the platforms would otherwise go dark. To keep
+viewers on something instead, the relay can play an **away file** - a short
+MP4 loop - on the ingest path whenever no publisher is connected. This is
+mediamtx's built-in "always available" mode (mediamtx >= 1.16.3), so no
+extra process is involved: mediamtx serves the file itself and swaps to the
+live stream the moment OBS reconnects, without re-encoding and without
+viewers reconnecting. The re-broadcast ffmpeg units keep pulling through
+the whole switch, which is why the platforms never drop.
+
+### 1. Prepare the away file
+
+Point mediamtx at any MP4 clip you like - a "be right back" card, a
+highlight reel, an ad, whatever. Put it somewhere mediamtx can read, e.g.
+`/etc/multistream/away.mp4`. Requirements: MP4, H.264 video + AAC audio, a
+keyframe at the start (every MP4 has one), and a total duration of a few
+minutes or less (it is played on repeat).
+
+One constraint to know: while the away segment is playing, mediamtx
+requires the incoming live stream's **audio** to match the away file's
+(same codec, sample rate and channel count), or it rejects the publish
+("audio configuration does not match"). Video may differ freely - the
+resolution and level switch without issue. So keep the away file's audio at
+AAC 48 kHz stereo, which matches OBS's default, or match your OBS audio
+settings exactly.
+
+### 2. Enable it in mediamtx
+
+In `/etc/multistream/mediamtx.yml`, extend the ingest path:
+
+```yaml
+paths:
+  live/MY_LONG_RANDOM_NAME:
+    source: publisher
+    alwaysAvailable: true
+    alwaysAvailableFile: /etc/multistream/away.mp4
+```
+
+Then `sudo systemctl restart mediamtx`. Without `alwaysAvailableFile`,
+mediamtx serves a built-in black video + silence instead (then set
+`alwaysAvailableTracks` to the codecs of your stream).
+
+### 3. Tell multistream about it
+
+Add the file to the multistream config so `check` can verify it:
+
+```json
+"away_file": "/etc/multistream/away.mp4"
+```
+
+### What you see
+
+```
+$ multistream status
+ingest    AWAY  1.20 Mbps  1920x1080 h264  mpeg-4 audio  readers 2/2  away 1h05m
+twitch    UP  connected, restarts 0
+kick      UP  connected, restarts 0
+```
+
+`AWAY` means the away file is playing, the re-broadcasters are pushing it
+to every platform, and the chain is waiting for the real stream. It is a
+healthy state: the exit code stays `0`, so cron alerts only fire when
+something is actually broken. When OBS starts, the line flips back to `UP`;
+in `--watch` mode you get an event line on both transitions
+(`ingest AWAY (offline segment, waiting for publisher)` and
+`ingest PUBLISHING`).
 
 ## Putting the relay on a VPS (optional)
 
@@ -335,12 +414,14 @@ internal/report/       status collection, table/JSON rendering
 internal/check/        deployment probe
 internal/systemd/      systemctl wrappers
 internal/version/      build metadata (-ldflags)
+npm/                   npm wrapper (postinstall binary download)
 ```
 
 Conventions: stdlib only, no external Go modules; `golangci-lint`
 (errcheck, staticcheck, goimports with local prefix); tests must pass
-`-race`. CI runs on push/PR; tags `v*` produce a GitHub release with
-per-platform raw binaries, tarballs and SHA256SUMS.
+`-race`. CI runs on push/PR; tags `v*` produce a GitHub release
+(raw binaries + tarballs + SHA256SUMS) and publish
+`@arifyaman/multistream` to npm via trusted publishing.
 
 ## License
 

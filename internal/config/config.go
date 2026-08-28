@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -35,6 +36,11 @@ type Config struct {
 	RefreshSec int `json:"refresh_sec,omitempty"`
 	// KeysDir holds the 0600 key env files (<name>.env per platform).
 	KeysDir string `json:"keys_dir,omitempty"`
+	// AwayFile is the MP4 that mediamtx loops on the ingest path while no
+	// publisher is connected (the mediamtx "always available" feature,
+	// requires mediamtx >= 1.16.3 and alwaysAvailable in its config).
+	// Optional; when set, `check` verifies the file exists.
+	AwayFile string `json:"away_file,omitempty"`
 	// Platforms is the list of re-broadcast destinations.
 	Platforms []Platform `json:"platforms"`
 
@@ -116,6 +122,9 @@ func (c *Config) validate() error {
 	}
 	if c.RefreshSec == 0 {
 		c.RefreshSec = 2
+	}
+	if c.AwayFile != "" && !filepath.IsAbs(c.AwayFile) {
+		return fmt.Errorf("away_file must be an absolute path, got %q", c.AwayFile)
 	}
 	if len(c.Platforms) == 0 {
 		return fmt.Errorf("at least one platform is required")

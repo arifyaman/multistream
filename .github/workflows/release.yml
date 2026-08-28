@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write
+  # Required for npm trusted publishing (OIDC identity, no token needed)
+  id-token: write
 
 jobs:
   build:
@@ -94,3 +96,45 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  npm:
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sha256sums-*
+          merge-multiple: true
+          path: sha256sums
+      - name: Stage package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p stage/bin
+          cat sha256sums/SHA256SUMS-*.txt | sort > sha256sums/SHA256SUMS.txt
+          node npm/make-package.mjs "$version" sha256sums/SHA256SUMS.txt \
+            "${{ github.server_url }}/${{ github.repository }}/releases" \
+            "${{ github.repository }}" > stage/package.json
+          cp npm/install.js stage/install.js
+          cp npm/bin/multistream.js stage/bin/multistream.js
+          cp npm/README.md stage/README.md
+      - name: Pack and publish
+        # Auth via npm trusted publishing (OIDC): no token, the runner's
+        # identity is verified by npm against the trusted publisher config
+        # (npmjs.com -> Publishing -> Trusted publishers).
+        run: |
+          cd stage
+          npm pack
+          # Pre-release tags (vX.Y.Z-*) go to the "alpha" dist-tag so plain
+          # "npm install" keeps resolving the latest stable version.
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            npm publish --access public --provenance --tag alpha
+          else
+            npm publish --access public --provenance
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

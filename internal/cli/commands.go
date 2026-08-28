@@ -156,6 +156,9 @@ func runConfig(cfg *config.Config) {
 	fmt.Printf("mediamtx api: %s\n", cfg.MediaMTXAPI)
 	fmt.Printf("ingest:       %s (port %d)\n", cfg.IngestPath, cfg.IngestPort)
 	fmt.Printf("refresh:      %ds\n", cfg.RefreshSec)
+	if cfg.AwayFile != "" {
+		fmt.Printf("away file:    %s\n", cfg.AwayFile)
+	}
 	if cfg.KeysDir != "" {
 		fmt.Printf("keys dir:     %s\n", cfg.KeysDir)
 	}

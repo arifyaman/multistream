@@ -3,6 +3,7 @@
   "ingest_path": "live/REPLACE_WITH_YOUR_LONG_RANDOM_STREAM_NAME",
   "ingest_port": 1935,
   "refresh_sec": 2,
+  "away_file": "/etc/multistream/away.mp4",
   "keys_dir": "/etc/multistream/keys",
   "platforms": [
     {

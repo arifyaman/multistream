@@ -20,6 +20,10 @@ import (
 // dialTimeout bounds endpoint probes.
 const dialTimeout = 5 * time.Second
 
+// awayMinVersion is the first mediamtx release with the always-available
+// (away file) feature.
+const awayMinVersion = "1.16.3"
+
 // Run performs all checks, prints a report, and returns a process exit
 // code (0 = all healthy).
 func Run(ctx context.Context, cfg *config.Config) int {
@@ -27,11 +31,18 @@ func Run(ctx context.Context, cfg *config.Config) int {
 	fmt.Printf("config file:  %s\n", cfg.Source())
 
 	client := mediamtx.NewClient(cfg.MediaMTXAPI)
+	mtxVersion := ""
+	haveVersion := false
 	if v, err := client.Version(ctx); err == nil {
+		mtxVersion, haveVersion = v, true
 		fmt.Printf("mediamtx:     OK  version %s  api %s\n", v, cfg.MediaMTXAPI)
 	} else {
 		code = 1
 		fmt.Printf("mediamtx:     FAIL  api %s  %v\n", cfg.MediaMTXAPI, err)
+	}
+
+	if cfg.AwayFile != "" && !checkAwayFile(cfg.AwayFile, mtxVersion, haveVersion) {
+		code = 1
 	}
 
 	for i := range cfg.Platforms {
@@ -70,6 +81,43 @@ func Run(ctx context.Context, cfg *config.Config) int {
 		fmt.Printf("%-10s OK  %s\n", p.Name, line)
 	}
 	return code
+}
+
+// checkAwayFile verifies the configured away file: it must exist, be a
+// non-empty regular file, and the mediamtx version (when known) must be
+// new enough to play it.
+func checkAwayFile(path, mtxVersion string, haveVersion bool) bool {
+	st, err := os.Stat(path)
+	if err != nil {
+		fmt.Printf("away file:    FAIL  %s  %v\n", path, err)
+		return false
+	}
+	if st.IsDir() || st.Size() == 0 {
+		fmt.Printf("away file:    FAIL  %s  empty or not a regular file\n", path)
+		return false
+	}
+	if haveVersion {
+		if ok, err := mediamtx.VersionAtLeast(mtxVersion, awayMinVersion); err == nil && !ok {
+			fmt.Printf("away file:    FAIL  %s  requires mediamtx >= %s (have %s)\n",
+				path, awayMinVersion, mtxVersion)
+			return false
+		}
+	}
+	fmt.Printf("away file:    OK  %s  %s\n", path, humanSize(st.Size()))
+	return true
+}
+
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // parsePushURL extracts the host and port of an rtmp(s) push URL

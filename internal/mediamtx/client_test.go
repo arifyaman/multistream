@@ -22,6 +22,8 @@ func writeJSON(t *testing.T, w http.ResponseWriter, status int, body string) {
 
 const pathBody = `{
   "name": "live/test",
+  "available": true,
+  "availableTime": "2026-08-27T21:14:02Z",
   "online": true,
   "onlineTime": "2026-08-27T21:14:02Z",
   "inboundBytes": 123456789,
@@ -55,6 +57,9 @@ func TestGetPathInfo(t *testing.T) {
 	info := p.Info()
 	if !info.Online {
 		t.Error("want online true")
+	}
+	if !info.Available {
+		t.Error("want available true")
 	}
 	if info.Readers != 3 {
 		t.Errorf("readers = %d, want 3", info.Readers)
@@ -143,6 +148,98 @@ func TestInfoNoVideoTrack(t *testing.T) {
 	}
 	if info.AudioCodec != "MPEG-4 Audio" {
 		t.Errorf("audioCodec = %q", info.AudioCodec)
+	}
+}
+
+func TestInfoAwaySegment(t *testing.T) {
+	// The path is readable but no publisher is connected: mediamtx is
+	// playing the always-available offline segment.
+	body := `{
+	  "name": "live/away",
+	  "available": true,
+	  "availableTime": "2026-08-27T21:00:00Z",
+	  "online": false,
+	  "readers": [{"id": "a", "type": "rtmp"}],
+	  "tracks2": [
+	    {"codec": "H264", "codecProps": {"width": 1920, "height": 1080}}
+	  ]
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, 0, body)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	p, err := c.GetPath(context.Background(), "live/away")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := p.Info()
+	if info.Online {
+		t.Error("want online false")
+	}
+	if !info.Available {
+		t.Error("want available true")
+	}
+	if info.Readers != 1 {
+		t.Errorf("readers = %d, want 1", info.Readers)
+	}
+	want := time.Date(2026, 8, 27, 21, 0, 0, 0, time.UTC)
+	if !info.AvailableSince.Equal(want) {
+		t.Errorf("availableSince = %v, want %v", info.AvailableSince, want)
+	}
+}
+
+func TestInfoAvailableFieldAbsent(t *testing.T) {
+	// mediamtx < 1.16.3 does not report "available"; an online path
+	// must still count as available.
+	body := `{"name": "live/old", "online": true, "readers": []}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, 0, body)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	p, err := c.GetPath(context.Background(), "live/old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Info().Available {
+		t.Error("online path must be available even without the field")
+	}
+}
+
+func TestVersionAtLeast(t *testing.T) {
+	cases := []struct {
+		v, min string
+		want   bool
+		err    bool
+	}{
+		{"v1.20.1", "1.16.3", true, false},
+		{"v1.16.3", "1.16.3", true, false},
+		{"v1.16.2", "1.16.3", false, false},
+		{"v1.16", "1.16.3", false, false},
+		{"v2.0.0", "1.16.3", true, false},
+		{"1.9.0", "1.16.3", false, false},
+		{"v1.16.3-15-gabc", "1.16.3", true, false},
+		{"garbage", "1.16.3", false, true},
+		{"v1.20.1", "x", false, true},
+	}
+	for _, c := range cases {
+		got, err := VersionAtLeast(c.v, c.min)
+		if c.err {
+			if err == nil {
+				t.Errorf("VersionAtLeast(%q, %q) = %v, want error", c.v, c.min, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("VersionAtLeast(%q, %q): %v", c.v, c.min, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("VersionAtLeast(%q, %q) = %v, want %v", c.v, c.min, got, c.want)
+		}
 	}
 }
 
