@@ -114,6 +114,12 @@ jobs:
         run: |
           cd stage
           npm pack
-          npm publish --access public
+          # Pre-release tags (vX.Y.Z-*) go to the "alpha" dist-tag so plain
+          # "npm install" keeps resolving the latest stable version.
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            npm publish --access public --tag alpha
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
