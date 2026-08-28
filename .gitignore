@@ -3,3 +3,4 @@
 *.pid
 /bin
 /dist
+/deploy-notes.local.md
