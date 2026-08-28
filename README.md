@@ -54,8 +54,8 @@ npm install -g @arifyaman/multistream
 **Binary** (any OS/arch, or from the [GitHub releases](https://github.com/xlip/multiStream/releases)):
 
 ```
-curl -LO https://github.com/xlip/multiStream/releases/download/v207.1.0/multistream_207.1.0_linux_amd64
-install -m755 multistream_207.1.0_linux_amd64 /usr/local/bin/multistream
+curl -LO https://github.com/xlip/multiStream/releases/download/v2027.1.0/multistream_2027.1.0_linux_amd64
+install -m755 multistream_2027.1.0_linux_amd64 /usr/local/bin/multistream
 ```
 
 ## Configuration
