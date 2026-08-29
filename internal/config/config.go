@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -15,10 +16,9 @@ type Platform struct {
 	// Name is the unique, user-facing identifier (also the key file name
 	// stem: <keys_dir>/<name>.env).
 	Name string `json:"name"`
-	// Unit is the systemd unit that pushes to this platform.
-	Unit string `json:"unit"`
 	// PushURL is the RTMP(S) push URL. It may contain ${ENV_VAR} templates
-	// (used by the systemd unit); the CLI itself never resolves them.
+	// that the daemon resolves from the platform's key file before spawning
+	// ffmpeg; the read-only commands never resolve them.
 	PushURL string `json:"push_url"`
 }
 
@@ -41,6 +41,20 @@ type Config struct {
 	// requires mediamtx >= 1.16.3 and alwaysAvailable in its config).
 	// Optional; when set, `check` verifies the file exists.
 	AwayFile string `json:"away_file,omitempty"`
+	// FFmpegPath is the ffmpeg binary the daemon spawns. Default "ffmpeg"
+	// (found on PATH). Set this when ffmpeg is not on PATH (common on
+	// Windows).
+	FFmpegPath string `json:"ffmpeg_path,omitempty"`
+	// RestartSec is how long the daemon waits after an ffmpeg exit before
+	// respawning it. Default 5.
+	RestartSec int `json:"restart_sec,omitempty"`
+	// StartLimitIntervalSec and StartLimitBurst bound restarts: if a
+	// platform restarts more than StartLimitBurst times within
+	// StartLimitIntervalSec, the daemon stops respawning it and marks it
+	// "failed" (a manual `multistream restart` resets the limit). Defaults
+	// are 60 and 5.
+	StartLimitIntervalSec int `json:"start_limit_interval_sec,omitempty"`
+	StartLimitBurst       int `json:"start_limit_burst,omitempty"`
 	// Platforms is the list of re-broadcast destinations.
 	Platforms []Platform `json:"platforms"`
 
@@ -68,12 +82,24 @@ func (c *Config) KeyFile(p *Platform) string {
 	return c.KeysDir + "/" + p.Name + ".env"
 }
 
+// InputURL is the RTMP URL ffmpeg pulls from: the relay on loopback. The
+// daemon uses it as the ffmpeg input and the read-only commands use it as
+// the distinctive marker that identifies one of our ffmpeg processes in the
+// process table.
+func (c *Config) InputURL() string {
+	return "rtmp://127.0.0.1:" + strconv.Itoa(c.IngestPort) + "/" + c.IngestPath
+}
+
 // DefaultConfigPaths returns the candidate config locations, in priority
-// order: $MULTISTREAM_CONFIG, /etc/multistream/config.json, ./config.json.
+// order: $MULTISTREAM_CONFIG, the per-user config dir, the system-wide
+// /etc/multistream/config.json, and ./config.json.
 func DefaultConfigPaths() []string {
 	paths := []string{}
 	if p := os.Getenv("MULTISTREAM_CONFIG"); p != "" {
 		paths = append(paths, p)
+	}
+	if d, err := os.UserConfigDir(); err == nil {
+		paths = append(paths, filepath.Join(d, "multistream", "config.json"))
 	}
 	paths = append(paths, "/etc/multistream/config.json", "config.json")
 	return paths
@@ -123,6 +149,18 @@ func (c *Config) validate() error {
 	if c.RefreshSec == 0 {
 		c.RefreshSec = 2
 	}
+	if c.FFmpegPath == "" {
+		c.FFmpegPath = "ffmpeg"
+	}
+	if c.RestartSec == 0 {
+		c.RestartSec = 5
+	}
+	if c.StartLimitIntervalSec == 0 {
+		c.StartLimitIntervalSec = 60
+	}
+	if c.StartLimitBurst == 0 {
+		c.StartLimitBurst = 5
+	}
 	if c.AwayFile != "" && !filepath.IsAbs(c.AwayFile) {
 		return fmt.Errorf("away_file must be an absolute path, got %q", c.AwayFile)
 	}
@@ -138,9 +176,6 @@ func (c *Config) validate() error {
 			return fmt.Errorf("platforms[%d]: duplicate name %q", i, p.Name)
 		}
 		seen[p.Name] = true
-		if p.Unit == "" {
-			return fmt.Errorf("platform %q: unit is required", p.Name)
-		}
 		if p.PushURL == "" {
 			return fmt.Errorf("platform %q: push_url is required", p.Name)
 		}

@@ -14,9 +14,16 @@ twitch    UP  connected, restarts 0
 kick      UP  connected, restarts 0
 ```
 
-It is a single static Go binary with zero dependencies and no daemon.
-Exit code is `0` when everything is healthy and `1` when anything is down,
-so it doubles as a health check you can put in cron or an alert script.
+It is a single static Go binary with zero dependencies. One of its commands
+(`multistream daemon`) is a small supervisor that owns the ffmpeg
+re-broadcasters - it spawns them, restarts them if they die, and keeps their
+state. The other commands (`status`, `check`, ...) are read-only and work with
+or without the daemon running. `status` exits `0` when everything is healthy
+and `1` when anything is down, so it doubles as a health check you can put in
+cron or an alert script.
+
+It runs as **your normal user** - no dedicated service account, no groups.
+Config, keys and state all live in your home directory.
 
 ## Why relay instead of pushing directly from OBS?
 
@@ -40,9 +47,10 @@ stream, no re-encoding. From there:
 - **Every platform gets the identical stream** - same bitrate, resolution
   and encoder settings, because it is literally the same stream.
 - **Failures are isolated.** Twitch having a bad day does not touch your
-  Kick stream. Each ffmpeg is a systemd unit with `Restart=always`, so
-  transient platform outages recover on their own while you keep streaming.
-- **Your keys stay in 0600 files next to the relay**, not in OBS.
+  Kick stream. The `multistream` daemon runs one ffmpeg per platform and
+  restarts it automatically (with a rate limit), so transient platform
+  outages recover on their own while you keep streaming.
+- **Your keys stay in 0600 files in your home config dir**, not in OBS.
 
 `multistream` is how you *see* all of this while you stream: is OBS still
 pushing? at what bitrate? is each platform actually connected - not just
@@ -52,11 +60,12 @@ pushing? at what bitrate? is each platform actually connected - not just
 
 ```
 OBS ──RTMP (one upload)──▶ mediamtx :1935 ──┬──▶ ffmpeg ──▶ Twitch
-                       (the relay)          ├──▶ ffmpeg ──▶ Kick
-                                            └──▶ ffmpeg ──▶ YouTube
+                        (the relay)          ├──▶ ffmpeg ──▶ Kick
+                                             └──▶ ffmpeg ──▶ YouTube
+        the multistream daemon spawns + watches the ffmpeg processes
 
-multistream polls the mediamtx API, systemd and /proc on the
-relay machine, then prints the table.
+multistream status asks the daemon (and reads the mediamtx API), then
+prints the table.
 ```
 
 Every line is measured, not guessed:
@@ -64,19 +73,82 @@ Every line is measured, not guessed:
 - **ingest** - from the mediamtx HTTP API: is a publisher connected,
   inbound bitrate (delta between polls), resolution and codecs, and
   `readers N/M` = how many of your M re-broadcasters are pulling right now.
-- **each platform** - from its systemd unit (alive? failed?
-  restart-looping? how many restarts?) plus a check of the ffmpeg process's
-  actual network connections: it only counts as connected when it has an
-  established TCP connection to the relay.
+- **each platform** - from the daemon (alive? restarting? failed after too
+  many restarts? how many restarts? last error?) plus a check of the ffmpeg
+  process's actual network connections: it only counts as connected when it
+  has an established TCP connection to the relay. `status` also works when
+  the daemon is not running - it then falls back to the mediamtx API and the
+  processes it can see, and tells you the daemon is down.
 
 ## Requirements
 
-- **Linux + systemd** on the machine that runs the relay and the ffmpeg
-  units - that is where the full per-platform status comes from.
-- `mediamtx` (the relay) and `ffmpeg` on that machine.
-- The `multistream` binary itself runs anywhere that can reach the mediamtx
-  API, but the per-platform lines (unit state, connection check) are
-  systemd/Linux-only, so this project targets Linux hosts.
+- `mediamtx` (the relay) and `ffmpeg` on the machine that does the
+  re-broadcasting.
+- The `multistream` daemon runs on **Linux, macOS and Windows** with no
+  systemd dependency - it spawns and supervises the ffmpeg processes itself.
+  See [OS notes](#os-notes) for the per-OS differences.
+- The read-only `status`/`check`/`config` commands run anywhere that can
+  reach the mediamtx API and the daemon.
+
+## OS notes
+
+Everything works on all three OSes; what differs is how much the read-only
+commands can verify, because the precise per-process checks are built on
+`/proc` (Linux only):
+
+- **Linux:** full fidelity. `status` verifies each ffmpeg holds an
+  established TCP connection to the relay. If the daemon is not running,
+  `status` can still see ffmpeg processes a previous daemon left behind - it
+  reads the pid files that daemon wrote to the state dir and checks them
+  against the process table (`/proc`). That is read-only diagnostics only:
+  nothing is managed without the daemon. On start, the daemon itself clears
+  such orphaned ffmpeg so a platform is never pushed twice.
+- **macOS / Windows:** the daemon is the source of truth. A platform counts
+  as connected when the daemon reports it `running` - sound, because an
+  ffmpeg whose input is the relay would exit (and be restarted) if it were
+  not pulling. Without the daemon there is no per-platform view (the ingest
+  line still works - it comes from the mediamtx API). Orphan detection needs
+  a graceful daemon stop; if you hard-kill the daemon and start it again,
+  check for stray ffmpeg processes first.
+
+Where the daemon's state lives (overridable with `$MULTISTREAM_STATE`):
+
+- Linux: `~/.local/state/multistream`
+- macOS: `~/Library/Application Support/multistream`
+- Windows: `%LOCALAPPDATA%\multistream`
+
+Keeping the daemon alive:
+
+- **Linux:** a systemd unit - see [step 3](#3-start-the-daemon) (a user unit,
+  or a system unit with `User=<you>`).
+- **macOS:** a launchd agent. Save the following as
+  `~/Library/LaunchAgents/com.arifyaman.multistream.plist`, with
+  `ProgramArguments` set to your binary's path (find it with
+  `command -v multistream`):
+
+  ```xml
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  <dict>
+      <key>Label</key><string>com.arifyaman.multistream</string>
+      <key>ProgramArguments</key>
+      <array>
+          <string>/path/to/multistream</string>
+          <string>daemon</string>
+      </array>
+      <key>RunAtLoad</key><true/>
+      <key>KeepAlive</key><true/>
+  </dict>
+  </plist>
+  ```
+
+  Then load it:
+  `launchctl load ~/Library/LaunchAgents/com.arifyaman.multistream.plist`
+- **Windows:** a Task Scheduler task that runs `multistream.exe daemon` at
+  logon (with the "restart if it fails" option), or simply a terminal you
+  keep open. Also set `ffmpeg_path` in your config - ffmpeg is usually not on
+  PATH on Windows.
 
 ## Install
 
@@ -87,12 +159,12 @@ time):
 npm install -g @arifyaman/multistream
 ```
 
-**Binary** (any OS/arch, or straight from the
-[GitHub releases](https://github.com/arifyaman/multiStream/releases)):
+**Binary:** download the asset for your platform from the
+[latest release](https://github.com/arifyaman/multiStream/releases/latest)
+(named `multistream_<version>_<os>_<arch>`, or the matching `.tar.gz`), then:
 
 ```
-curl -LO https://github.com/arifyaman/multiStream/releases/download/v2027.1.0-alpha.1/multistream_2027.1.0-alpha.1_linux_amd64
-install -m755 multistream_2027.1.0-alpha.1_linux_amd64 /usr/local/bin/multistream
+install -m755 multistream_* /usr/local/bin/multistream
 ```
 
 Or build from source (Go >= 1.22, no external deps): `make build`.
@@ -101,13 +173,19 @@ Or build from source (Go >= 1.22, no external deps): `make build`.
 
 Assumptions: a Linux box (your gaming/streaming PC or a home server) that
 runs OBS and has internet access, plus a Twitch and/or Kick account.
-Everything below lives on that one machine.
+Everything below lives on that one machine, and the `multistream` part runs as
+**your normal user** - no dedicated account, no groups, and (for the daemon)
+no root. Only the optional relay service in step 1 traditionally runs as a
+system service.
 
 ### 1. Install the relay (mediamtx)
 
+Grab the latest [mediamtx release](https://github.com/bluenviron/mediamtx/releases)
+for your platform (a `mediamtx_<version>_<os>_<arch>.tar.gz` tarball) and
+install the binary from it:
+
 ```
-curl -LO https://github.com/bluenviron/mediamtx/releases/download/v1.20.1/mediamtx_v1.20.1_linux_amd64.tar.gz
-tar -xzf mediamtx_v1.20.1_linux_amd64.tar.gz
+tar -xzf mediamtx_*.tar.gz
 sudo install -m755 mediamtx /usr/local/bin/mediamtx
 ```
 
@@ -143,50 +221,17 @@ Restart=always
 WantedBy=multi-user.target
 ```
 
-### 2. One ffmpeg unit per platform
+### 2. Configure multistream
 
-Keep each key in its own 0600 file, e.g. `/etc/multistream/keys/twitch.env`:
+Everything `multistream` needs lives in your home config dir - nothing in
+`/etc`, no special permissions. Keep each key in its own 0600 file, e.g.
+`~/.config/multistream/keys/twitch.env`:
 
 ```
 TWITCH_KEY=live_xxxxxxxxxxxxxxxxxxxx
 ```
 
-Then one systemd unit per platform. Twitch
-(`/etc/systemd/system/multistream-twitch.service`):
-
-```ini
-[Unit]
-Description=multistream re-broadcast to Twitch
-After=network-online.target mediamtx.service
-
-[Service]
-EnvironmentFile=/etc/multistream/keys/twitch.env
-ExecStart=/usr/bin/ffmpeg -hide_banner -loglevel warning \
-    -i rtmp://127.0.0.1:1935/live/MY_LONG_RANDOM_NAME \
-    -c copy -f flv rtmp://live.twitch.tv/app/${TWITCH_KEY}
-Restart=always
-RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Repeat for Kick (and YouTube) with the platform's push URL - see
-[Platform notes](#platform-notes) for the URL quirks. Then:
-
-```
-sudo systemctl daemon-reload
-sudo systemctl enable --now mediamtx multistream-twitch multistream-kick
-```
-
-The ffmpeg units start and wait: as soon as OBS publishes, each one locks
-on and re-pushes automatically.
-
-### 3. Configure multistream
-
-`/etc/multistream/config.json`:
+Create `~/.config/multistream/config.json`:
 
 ```json
 {
@@ -194,15 +239,64 @@ on and re-pushes automatically.
   "ingest_path": "live/MY_LONG_RANDOM_NAME",
   "ingest_port": 1935,
   "refresh_sec": 2,
-  "keys_dir": "/etc/multistream/keys",
+  "keys_dir": "/home/YOUR_USER/.config/multistream/keys",
   "platforms": [
-    { "name": "twitch", "unit": "multistream-twitch",
+    { "name": "twitch",
       "push_url": "rtmp://live.twitch.tv/app/${TWITCH_KEY}" },
-    { "name": "kick", "unit": "multistream-kick",
-      "push_url": "rtmps://YOUR_KICK_CDN_HOST//${KICK_KEY}" }
+    { "name": "kick",
+      "push_url": "rtmps://YOUR_KICK_CDN_HOST/${KICK_KEY}" }
   ]
 }
 ```
+
+`keys_dir` is used verbatim, so write an **absolute path** (the `~` in the
+example above is only for readability). The daemon reads those files to expand
+the `${TWITCH_KEY}` / `${KICK_KEY}` templates in the push URLs; the read-only
+commands only check that the files exist and never print the keys.
+
+### 3. Start the daemon
+
+Run it in a terminal to try it:
+
+```
+multistream daemon
+```
+
+The daemon spawns one ffmpeg per platform and they start waiting: as soon as
+OBS publishes, each one locks on and re-pushes automatically. If an ffmpeg
+exits, the daemon restarts it (with a rate limit) - all inside the app, so it
+works on any OS with no systemd dependency.
+
+To keep it running (and restart it if it dies) **without root**, install a
+systemd *user* unit, `~/.config/systemd/user/multistream.service`. Set
+`ExecStart` to your binary's path (find it with `command -v multistream`):
+
+```ini
+[Unit]
+Description=multistream re-broadcast supervisor
+After=network-online.target
+
+[Service]
+ExecStart=/home/YOUR_USER/.local/bin/multistream daemon
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+```
+systemctl --user enable --now multistream
+```
+
+On a headless machine (a VPS with no desktop session) enable *linger* so the
+user service keeps running after you log out:
+
+```
+sudo loginctl enable-linger $USER
+```
+
+(If you'd rather use a system service, a unit in `/etc/systemd/system/` with
+`User=<your-user>` works the same way.)
 
 ### 4. Point OBS at the relay
 
@@ -230,7 +324,7 @@ keeps streaming fine:
 ```
 $ multistream status
 ingest    UP  7.08 Mbps  1920x1080 h264  mpeg-4 audio  readers 1/2  up 1h12m
-twitch    DOWN  failed/failed, restarts 3, connection refused
+twitch    DOWN  failed, restarts 3, connection refused
 kick      UP  connected, restarts 1
 ```
 
@@ -244,41 +338,71 @@ it even if the table is not on screen.
 multistream [status] [--watch] [--interval N] [--json] [--no-color]
 multistream check
 multistream restart <platform>
+multistream daemon
 multistream config
 ```
 
 | command | what it does |
 |---|---|
-| `status` | one-shot table (default command). `--watch` keeps refreshing and prints an event line when anything changes (ingest dropped, away file playing, platform down/up). `--json` for machines. |
-| `check` | probe the setup without streaming: mediamtx API reachable + version, each unit exists, each push endpoint is TCP-reachable, each key file exists, away file present. Run this after setup. |
-| `restart <platform>` | restart one re-broadcaster (`systemctl restart`). |
+| `status` | one-shot table (default command). `--watch` keeps refreshing and prints an event line when anything changes (ingest dropped, away file playing, platform down/up). `--json` for machines. Works with or without the daemon running. |
+| `check` | probe the setup without streaming: mediamtx API reachable + version, the daemon is running, each push endpoint is TCP-reachable, each key file exists, away file present. Run this after setup. |
+| `restart <platform>` | ask the daemon to restart one re-broadcaster (resets its restart limit). Refuses if the daemon is not running, since a restart without a supervisor would be unsupervised. |
+| `daemon` | run the supervisor in the foreground: spawn one ffmpeg per platform and keep them alive. Keep it running with a service manager (see step 3). |
 | `config` | print the effective configuration (key values are never read or printed). |
 
 Global flags: `-config <file>`, `-version`, `-h`.
 
 ## Configuration
 
-JSON file, searched in this order:
+One JSON file - see [CONFIG.md](CONFIG.md) for the full field reference and
+[config.example.json](config.example.json) for a template. It is searched for
+in this order: `-config <file>`, `$MULTISTREAM_CONFIG`, the per-user config
+dir (`~/.config/multistream/config.json` on Linux), `/etc/multistream/config.json`,
+`./config.json`.
 
-1. `-config /path/to/config.json` (any command)
-2. `$MULTISTREAM_CONFIG`
-3. `/etc/multistream/config.json`
-4. `./config.json`
+What you always set: `mediamtx_api`, `ingest_path`, `keys_dir`, and one
+`platforms[]` entry per platform (`name` + `push_url` with a `${KEY}`
+template). Everything else has a sensible default.
 
-- `mediamtx_api` - base URL of the mediamtx HTTP API. `http://127.0.0.1:9997`
-  when the CLI runs on the relay machine.
-- `ingest_path` - the path OBS pushes to (must match mediamtx's config).
-- `ingest_port` - RTMP port, default 1935.
-- `refresh_sec` - default `--watch` interval in seconds.
-- `away_file` - optional. The off-air placeholder MP4 that mediamtx loops
-  while no publisher is connected (see [Off-air: the away file](#off-air-the-away-file)).
-  `check` verifies the file exists and that mediamtx is new enough to play
-  it. The file itself is only read by mediamtx, not by `multistream`.
-- `keys_dir` - where the 0600 `<name>.env` key files live. `multistream`
-  only checks that they exist; it never reads or prints key values. The
-  ffmpeg units load the same files via `EnvironmentFile=`, which is what
-  actually expands `${TWITCH_KEY}` in the push URL.
-- `platforms[].unit` - the systemd unit name without `.service`.
+## Keys
+
+Each platform's stream key lives in its own file under `keys_dir`, named
+after the platform's `name`: `<keys_dir>/<name>.env`. The file is a plain env
+file - one `NAME=VALUE` per line, with blank lines and `#` comments ignored
+and surrounding quotes stripped:
+
+```
+# ~/.config/multistream/keys/twitch.env
+TWITCH_KEY=live_xxxxxxxxxxxxxxxxxxxx
+```
+
+Only the variables used in the platform's `push_url` (`${NAME}`) matter;
+extra variables are harmless. If a template has no matching key, the daemon
+refuses to start that platform and says exactly which variable is missing.
+
+Where to find the key:
+
+- **Twitch:** creator dashboard → Settings → Stream → copy the stream key.
+- **Kick:** creator dashboard → streaming settings → RTMP key.
+- **YouTube:** the per-stream name from your YouTube live dashboard. It is
+  not a long-lived secret, but keep it unguessable and unshared.
+
+Security:
+
+- Keep key files private: `0600` on Linux/macOS (create with `umask 077` or
+  `chmod 600` afterwards); on Windows make sure only your own account can
+  read them.
+- Never put key *values* in `config.json` - the config only holds the
+  `${NAME}` template, so it is safe to show, share or version-control.
+- The daemon reads a key file when it starts, to build each ffmpeg command.
+  The read-only commands never read or print key values: `check` only verifies
+  the file exists, `config` prints the path, and any key that leaks into
+  ffmpeg's output is replaced with `[redacted]` in the daemon's state and
+  error lines.
+- To rotate a key, edit its file and **restart the daemon** (for example
+  `systemctl --user restart multistream`) - a platform's key is resolved once
+  when the daemon starts, so `multistream restart <platform>` alone will not
+  pick up the new value.
 
 ## OBS settings that matter
 
@@ -294,12 +418,8 @@ The relay only rewraps - it cannot fix an incompatible source stream:
 
 ## Platform notes
 
-- **Kick:** its rtmps URL needs a **double slash** before the key -
-  `rtmps://host//KEY`, not `rtmps://host/KEY`. ffmpeg parses a
-  single-segment path as `app=KEY` with an *empty* stream name, and Kick
-  rejects the empty publish (symptom: TLS "End of file" right after the
-  push starts). Rule of thumb: if a platform's URL is `host/<key>` with no
-  app segment, always write `host//<key>` in the ffmpeg unit.
+- **Kick:** `rtmps://<host>/<key>` - the host and key come from your Kick
+  creator dashboard.
 - **Twitch:** `rtmp://live.twitch.tv/app/<key>`. CBR ceiling and no B-frames
   as above; partner status raises the bitrate cap.
 - **YouTube:** `rtmp://a.rtmp.youtube.com/live2/<stream_name>` - the "key"
@@ -313,7 +433,7 @@ MP4 loop - on the ingest path whenever no publisher is connected. This is
 mediamtx's built-in "always available" mode (mediamtx >= 1.16.3), so no
 extra process is involved: mediamtx serves the file itself and swaps to the
 live stream the moment OBS reconnects, without re-encoding and without
-viewers reconnecting. The re-broadcast ffmpeg units keep pulling through
+viewers reconnecting. The re-broadcast ffmpeg processes keep pulling through
 the whole switch, which is why the platforms never drop.
 
 ### 1. Prepare the away file
@@ -408,11 +528,14 @@ OBS machine's IP if it has one.
 cmd/multistream/       thin entrypoint
 internal/cli/          flags, dispatch, command runners
 internal/config/       config loading, key file locations
+internal/supervisor/   spawns + watches the per-platform ffmpeg processes
+internal/daemonipc/    daemon <-> client request/response protocol
+internal/state/        state dir, pid files, supervisor state document
+internal/procscan/     /proc PID liveness + cmdline guard
 internal/mediamtx/     mediamtx HTTP API client
 internal/netmon/       /proc-based PID->connection reader (no root needed)
 internal/report/       status collection, table/JSON rendering
 internal/check/        deployment probe
-internal/systemd/      systemctl wrappers
 internal/version/      build metadata (-ldflags)
 npm/                   npm wrapper (postinstall binary download)
 ```

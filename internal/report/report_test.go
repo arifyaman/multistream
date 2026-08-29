@@ -7,13 +7,13 @@ import (
 )
 
 func healthyPlatform(name string) PlatformStatus {
-	return PlatformStatus{Name: name, Unit: "multistream-" + name, UnitExists: true,
-		Active: "active", Sub: "running", Connected: true, PID: 1000}
+	return PlatformStatus{Name: name, Managed: true, Running: true,
+		Connected: true, PID: 1000, State: "running"}
 }
 
 func TestStatusReportJSON(t *testing.T) {
 	since := time.Now().Add(-time.Hour)
-	r := &StatusReport{Time: time.Now(), ExpectedReaders: 2, OK: true}
+	r := &StatusReport{Time: time.Now(), DaemonUp: true, ExpectedReaders: 2, OK: true}
 	r.Ingest = IngestStatus{Online: true, Available: true, Kbps: 6000, Readers: 2,
 		Resolution: "1920x1080", VideoCodec: "H264", AudioCodec: "MPEG-4 Audio", OnlineSince: &since}
 	r.Platforms = []PlatformStatus{healthyPlatform("twitch"), healthyPlatform("kick")}
@@ -23,8 +23,8 @@ func TestStatusReportJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(b)
-	for _, want := range []string{`"ok":true`, `"twitch"`, `"connected":true`, `"readers":2`,
-		`"kbps":6000`, `"online":true`, `"available":true`} {
+	for _, want := range []string{`"ok":true`, `"daemon_up":true`, `"twitch"`, `"connected":true`,
+		`"running":true`, `"readers":2`, `"kbps":6000`, `"online":true`, `"available":true`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("json missing %s: %s", want, s)
 		}
@@ -38,7 +38,7 @@ func TestStatusReportEvents(t *testing.T) {
 
 	cur := &StatusReport{}
 	cur.Ingest.Online = false
-	cur.Platforms = []PlatformStatus{{Name: "twitch", UnitExists: true, Active: "failed", Sub: "failed", LastError: "connection refused"}}
+	cur.Platforms = []PlatformStatus{{Name: "twitch", Managed: true, State: "failed", Restarts: 3, LastError: "connection refused"}}
 
 	ev := cur.Events(prev)
 	joined := strings.Join(ev, " | ")
@@ -99,7 +99,7 @@ func TestEventsAwayTransitions(t *testing.T) {
 
 func TestRenderAllUp(t *testing.T) {
 	since := time.Now().Add(-114 * time.Minute)
-	r := &StatusReport{Time: time.Now(), ExpectedReaders: 2, OK: true}
+	r := &StatusReport{Time: time.Now(), DaemonUp: true, ExpectedReaders: 2, OK: true}
 	r.Ingest = IngestStatus{Online: true, Kbps: 6020, Readers: 2,
 		Resolution: "1920x1080", VideoCodec: "H264", AudioCodec: "MPEG-4 Audio", OnlineSince: &since}
 	r.Platforms = []PlatformStatus{healthyPlatform("twitch"), healthyPlatform("kick")}
@@ -113,32 +113,38 @@ func TestRenderAllUp(t *testing.T) {
 			t.Errorf("table missing %q:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "not running") {
+		t.Errorf("all-up table must not mention the daemon being down:\n%s", out)
+	}
 }
 
 func TestRenderDegraded(t *testing.T) {
 	r := &StatusReport{Time: time.Now(), ExpectedReaders: 1, OK: false}
 	r.Ingest = IngestStatus{Online: false}
 	r.Platforms = []PlatformStatus{
-		{Name: "twitch", UnitExists: true, Active: "failed", Sub: "failed", Restarts: 3, LastError: "connection refused"},
-		{Name: "kick", UnitExists: false},
-		{Name: "youtube", UnitExists: true, Active: "active", Sub: "running", PID: 5},
+		{Name: "twitch", Managed: true, State: "failed", Restarts: 3, LastError: "connection refused"},
+		{Name: "kick"},
+		{Name: "youtube", Managed: true, Running: true, PID: 5, State: "running"},
 	}
 
 	out := r.Render(false)
 	for _, want := range []string{
 		"no publisher",
-		"failed/failed, restarts 3, connection refused",
-		"unit not found",
-		"running, not connected to mediamtx, restarts 0",
+		"failed, restarts 3, connection refused",
+		"not running (daemon not running)",
+		"running, not connected to relay, restarts 0",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("table missing %q:\n%s", want, out)
 		}
 	}
+	if !strings.Contains(out, "daemon    not running") {
+		t.Errorf("daemon-down table must note the daemon is not running:\n%s", out)
+	}
 }
 
 func TestRenderAPIError(t *testing.T) {
-	r := &StatusReport{Time: time.Now(), ExpectedReaders: 1, OK: false}
+	r := &StatusReport{Time: time.Now(), DaemonUp: true, ExpectedReaders: 1, OK: false}
 	r.Ingest = IngestStatus{APIError: "mediamtx API /v3/paths/get/live/x: HTTP 500"}
 	r.Platforms = []PlatformStatus{healthyPlatform("twitch")}
 
@@ -149,7 +155,7 @@ func TestRenderAPIError(t *testing.T) {
 }
 
 func TestRenderColor(t *testing.T) {
-	r := &StatusReport{Time: time.Now(), ExpectedReaders: 1, OK: true}
+	r := &StatusReport{Time: time.Now(), DaemonUp: true, ExpectedReaders: 1, OK: true}
 	r.Ingest = IngestStatus{Online: true, Readers: 1}
 	r.Platforms = []PlatformStatus{healthyPlatform("twitch")}
 
@@ -162,7 +168,7 @@ func TestRenderColor(t *testing.T) {
 		t.Error("colored render must contain green state")
 	}
 
-	away := &StatusReport{Time: time.Now(), ExpectedReaders: 1, OK: true}
+	away := &StatusReport{Time: time.Now(), DaemonUp: true, ExpectedReaders: 1, OK: true}
 	away.Ingest = IngestStatus{Available: true, Readers: 1}
 	away.Platforms = []PlatformStatus{healthyPlatform("twitch")}
 	if !strings.Contains(away.Render(true), cYellow) {
@@ -190,7 +196,7 @@ func TestIngestState(t *testing.T) {
 
 func TestRenderAway(t *testing.T) {
 	since := time.Now().Add(-65 * time.Minute)
-	r := &StatusReport{Time: time.Now(), ExpectedReaders: 2, OK: true}
+	r := &StatusReport{Time: time.Now(), DaemonUp: true, ExpectedReaders: 2, OK: true}
 	r.Ingest = IngestStatus{Available: true, Kbps: 1200, Readers: 2,
 		Resolution: "1920x1080", VideoCodec: "H264", AudioCodec: "MPEG-4 Audio", AvailableSince: &since}
 	r.Platforms = []PlatformStatus{healthyPlatform("twitch"), healthyPlatform("kick")}
@@ -213,11 +219,12 @@ func TestDownReason(t *testing.T) {
 		in   PlatformStatus
 		want string
 	}{
-		{PlatformStatus{UnitExists: false}, "unit not found"},
-		{PlatformStatus{UnitExists: true, UnitError: "x"}, "unit query failed"},
-		{PlatformStatus{UnitExists: true, Active: "failed"}, "failed"},
-		{PlatformStatus{UnitExists: true, Active: "inactive", Sub: "dead"}, "inactive/dead"},
-		{PlatformStatus{UnitExists: true, Active: "active", Sub: "running"}, "not connected"},
+		{PlatformStatus{Name: "a", Managed: false}, "daemon not running"},
+		{PlatformStatus{Name: "a", Managed: true, Running: true, ConnErr: "x"}, "connection check failed"},
+		{PlatformStatus{Name: "a", Managed: true, Running: true}, "not connected to relay"},
+		{PlatformStatus{Name: "a", Managed: true, State: "failed", LastError: "connection refused"}, "failed, connection refused"},
+		{PlatformStatus{Name: "a", Managed: true, State: "restarting"}, "restarting"},
+		{PlatformStatus{Name: "a", Managed: true}, "not running"},
 	}
 	for _, c := range cases {
 		if got := downReason(c.in); got != c.want {
@@ -259,8 +266,8 @@ func TestPlatformGood(t *testing.T) {
 		t.Error("disconnected platform should not be Good")
 	}
 	p.Connected = true
-	p.Sub = "auto-restart"
+	p.Running = false
 	if p.Good() {
-		t.Error("restarting platform should not be Good")
+		t.Error("not-running platform should not be Good")
 	}
 }

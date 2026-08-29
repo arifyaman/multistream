@@ -12,7 +12,7 @@ const minimalConfig = `{
   "mediamtx_api": "http://127.0.0.1:9997",
   "ingest_path": "live/test",
   "platforms": [
-    {"name": "twitch", "unit": "multistream-twitch", "push_url": "rtmp://h/app/k"}
+    {"name": "twitch", "push_url": "rtmp://h/app/k"}
   ]
 }`
 

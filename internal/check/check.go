@@ -1,6 +1,6 @@
 // Package check probes the multistream deployment without streaming:
-// mediamtx API reachability, unit existence, platform endpoint
-// reachability (TCP dial only) and key file presence.
+// mediamtx API reachability, the daemon, each platform's push endpoint
+// (TCP dial only), and key file presence.
 package check
 
 import (
@@ -13,8 +13,9 @@ import (
 	"time"
 
 	"github.com/xlip/multistream/internal/config"
+	"github.com/xlip/multistream/internal/daemonipc"
 	"github.com/xlip/multistream/internal/mediamtx"
-	"github.com/xlip/multistream/internal/systemd"
+	"github.com/xlip/multistream/internal/state"
 )
 
 // dialTimeout bounds endpoint probes.
@@ -45,31 +46,30 @@ func Run(ctx context.Context, cfg *config.Config) int {
 		code = 1
 	}
 
+	if daemonUp := checkDaemon(); daemonUp {
+		fmt.Println("daemon:       OK  running (supervising the re-broadcasters)")
+	} else {
+		code = 1
+		fmt.Println("daemon:       FAIL  not running (start it with: multistream daemon)")
+	}
+
 	for i := range cfg.Platforms {
 		p := &cfg.Platforms[i]
-		st, err := systemd.QueryUnit(ctx, p.Unit)
-		if err != nil || !st.Exists {
-			code = 1
-			fmt.Printf("%-10s FAIL  unit %s not found\n", p.Name, systemd.UnitName(p.Unit))
-			continue
-		}
 		host, port := parsePushURL(p.PushURL)
-		line := fmt.Sprintf("unit %s (%s/%s)", systemd.UnitName(p.Unit), st.Active, st.Sub)
 		if host == "" {
 			code = 1
-			line += "  FAIL push_url missing host"
-			fmt.Printf("%-10s %s\n", p.Name, line)
+			fmt.Printf("%-10s FAIL  push_url missing host\n", p.Name)
 			continue
 		}
 		d := net.Dialer{Timeout: dialTimeout}
 		conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 		if err != nil {
 			code = 1
-			fmt.Printf("%-10s %s  FAIL endpoint %s:%d unreachable (%v)\n", p.Name, line, host, port, err)
+			fmt.Printf("%-10s FAIL  endpoint %s:%d unreachable (%v)\n", p.Name, host, port, err)
 			continue
 		}
 		conn.Close()
-		line += fmt.Sprintf("  endpoint %s:%d reachable", host, port)
+		line := fmt.Sprintf("endpoint %s:%d reachable", host, port)
 		if kf := cfg.KeyFile(p); kf != "" {
 			if _, err := os.Stat(kf); err != nil {
 				code = 1
@@ -81,6 +81,16 @@ func Run(ctx context.Context, cfg *config.Config) int {
 		fmt.Printf("%-10s OK  %s\n", p.Name, line)
 	}
 	return code
+}
+
+// checkDaemon reports whether a daemon is currently serving IPC.
+func checkDaemon() bool {
+	dir, err := state.DirPath()
+	if err != nil {
+		return false
+	}
+	network, addr := state.IPCNetworkAddr(dir)
+	return daemonipc.Ping(network, addr) == nil
 }
 
 // checkAwayFile verifies the configured away file: it must exist, be a

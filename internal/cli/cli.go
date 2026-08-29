@@ -65,6 +65,8 @@ func Execute(args []string) int {
 		return runCheck(cfg)
 	case "restart":
 		return runRestart(cfg, rest)
+	case "daemon":
+		return runDaemon(cfg)
 	case "config":
 		runConfig(cfg)
 		return 0

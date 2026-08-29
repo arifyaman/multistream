@@ -3,10 +3,14 @@ package netmon
 import (
 	"net"
 	"os"
+	"runtime"
 	"testing"
 )
 
 func TestPIDConnectedTo(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("PIDConnectedTo is /proc-based; Linux only")
+	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

@@ -10,7 +10,7 @@ const validConfig = `{
   "mediamtx_api": "http://127.0.0.1:9997",
   "ingest_path": "live/test",
   "platforms": [
-    {"name": "twitch", "unit": "multistream-twitch", "push_url": "rtmp://live.twitch.tv/app/${TWITCH_KEY}"}
+    {"name": "twitch", "push_url": "rtmp://live.twitch.tv/app/${TWITCH_KEY}"}
   ]
 }`
 
@@ -35,15 +35,22 @@ func TestLoadConfigValid(t *testing.T) {
 	if cfg.RefreshSec != 2 {
 		t.Errorf("default refresh = %d, want 2", cfg.RefreshSec)
 	}
+	if cfg.FFmpegPath != "ffmpeg" {
+		t.Errorf("default ffmpeg_path = %q, want ffmpeg", cfg.FFmpegPath)
+	}
+	if cfg.RestartSec != 5 || cfg.StartLimitIntervalSec != 60 || cfg.StartLimitBurst != 5 {
+		t.Errorf("supervisor defaults = %d/%d/%d, want 5/60/5",
+			cfg.RestartSec, cfg.StartLimitIntervalSec, cfg.StartLimitBurst)
+	}
+	if got, want := cfg.InputURL(), "rtmp://127.0.0.1:1935/live/test"; got != want {
+		t.Errorf("InputURL = %q, want %q", got, want)
+	}
 	if cfg.Source() != path {
 		t.Errorf("source = %q, want %q", cfg.Source(), path)
 	}
 	p, ok := cfg.PlatformByName("twitch")
 	if !ok {
 		t.Fatal("twitch platform not found")
-	}
-	if p.Unit != "multistream-twitch" {
-		t.Errorf("unit = %q", p.Unit)
 	}
 	if _, ok := cfg.PlatformByName("nope"); ok {
 		t.Error("unknown platform should not be found")
@@ -61,8 +68,9 @@ func TestLoadConfigDefaultsApplied(t *testing.T) {
 		"refresh_sec": 5,
 		"away_file": "/etc/multistream/away.mp4",
 		"keys_dir": "/etc/multistream/keys",
+		"ffmpeg_path": "/opt/ffmpeg/bin/ffmpeg",
 		"platforms": [
-			{"name": "a", "unit": "u-a", "push_url": "rtmp://h/p"}
+			{"name": "a", "push_url": "rtmp://h/p"}
 		]
 	}`)
 	cfg, err := LoadConfig(path)
@@ -71,6 +79,9 @@ func TestLoadConfigDefaultsApplied(t *testing.T) {
 	}
 	if cfg.IngestPort != 9999 || cfg.RefreshSec != 5 {
 		t.Errorf("explicit values not preserved: %+v", cfg)
+	}
+	if cfg.FFmpegPath != "/opt/ffmpeg/bin/ffmpeg" {
+		t.Errorf("ffmpeg_path = %q, want explicit value", cfg.FFmpegPath)
 	}
 	if got := cfg.KeyFile(&cfg.Platforms[0]); got != "/etc/multistream/keys/a.env" {
 		t.Errorf("KeyFile = %q", got)
@@ -92,27 +103,32 @@ func TestLoadConfigAwayFileOptional(t *testing.T) {
 
 func TestDefaultConfigPaths(t *testing.T) {
 	t.Setenv("MULTISTREAM_CONFIG", "/custom/path.json")
+	t.Setenv("HOME", t.TempDir()) // make os.UserConfigDir deterministic
+	os.Unsetenv("XDG_CONFIG_HOME")
 	paths := DefaultConfigPaths()
 	if paths[0] != "/custom/path.json" {
 		t.Errorf("env override not first: %v", paths)
 	}
-	if len(paths) != 3 {
-		t.Errorf("want 3 candidates, got %v", paths)
+	// env, per-user config dir, system-wide, and ./config.json.
+	if len(paths) != 4 {
+		t.Errorf("want 4 candidates, got %v", paths)
+	}
+	if paths[len(paths)-2] != "/etc/multistream/config.json" || paths[len(paths)-1] != "config.json" {
+		t.Errorf("system and local paths missing: %v", paths)
 	}
 }
 
 func TestLoadConfigErrors(t *testing.T) {
 	cases := map[string]string{
 		"empty object":          `{}`,
-		"bad api scheme":        `{"mediamtx_api":"ftp://x","ingest_path":"a","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
-		"api without host":      `{"mediamtx_api":"http://","ingest_path":"a","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
-		"missing ingest path":   `{"mediamtx_api":"http://127.0.0.1:9997","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
+		"bad api scheme":        `{"mediamtx_api":"ftp://x","ingest_path":"a","platforms":[{"name":"a","push_url":"rtmp://h/p"}]}`,
+		"api without host":      `{"mediamtx_api":"http://","ingest_path":"a","platforms":[{"name":"a","push_url":"rtmp://h/p"}]}`,
+		"missing ingest path":   `{"mediamtx_api":"http://127.0.0.1:9997","platforms":[{"name":"a","push_url":"rtmp://h/p"}]}`,
 		"no platforms":          `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[]}`,
-		"missing platform name": `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"unit":"u","push_url":"rtmp://h/p"}]}`,
-		"missing platform unit": `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","push_url":"rtmp://h/p"}]}`,
-		"missing push url":      `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","unit":"u"}]}`,
-		"duplicate names":       `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","unit":"u1","push_url":"rtmp://h/p"},{"name":"a","unit":"u2","push_url":"rtmp://h/p"}]}`,
-		"relative away file":    `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","away_file":"away.mp4","platforms":[{"name":"a","unit":"u","push_url":"rtmp://h/p"}]}`,
+		"missing platform name": `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"push_url":"rtmp://h/p"}]}`,
+		"missing push url":      `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a"}]}`,
+		"duplicate names":       `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","platforms":[{"name":"a","push_url":"rtmp://h/p"},{"name":"a","push_url":"rtmp://h/p"}]}`,
+		"relative away file":    `{"mediamtx_api":"http://127.0.0.1:9997","ingest_path":"a","away_file":"away.mp4","platforms":[{"name":"a","push_url":"rtmp://h/p"}]}`,
 		"invalid json":          `{not json`,
 	}
 	for name, content := range cases {

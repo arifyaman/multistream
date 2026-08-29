@@ -1,5 +1,8 @@
 // Package report assembles the full status picture (ingest + platforms)
-// and renders it as a terminal table or JSON.
+// and renders it as a terminal table or JSON. It is daemon-optional: the
+// ingest line always comes from the mediamtx API, and each platform line is
+// built from live process inspection plus, when the daemon is running, the
+// supervisor's richer state (restart count, last error, failed state).
 package report
 
 import (
@@ -7,13 +10,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/xlip/multistream/internal/config"
+	"github.com/xlip/multistream/internal/daemonipc"
 	"github.com/xlip/multistream/internal/mediamtx"
 	"github.com/xlip/multistream/internal/netmon"
-	"github.com/xlip/multistream/internal/systemd"
+	"github.com/xlip/multistream/internal/procscan"
+	"github.com/xlip/multistream/internal/state"
 )
 
 // sampleInterval is the double-sample window used to measure ingest
@@ -53,54 +59,67 @@ func (s IngestStatus) State() string {
 
 // PlatformStatus is the normalized state of one re-broadcaster.
 type PlatformStatus struct {
-	Name       string `json:"name"`
-	Unit       string `json:"unit"`
-	UnitExists bool   `json:"unit_exists"`
-	UnitError  string `json:"unit_error,omitempty"`
-	Active     string `json:"active_state,omitempty"`
-	Sub        string `json:"sub_state,omitempty"`
-	Connected  bool   `json:"connected"`
-	ConnErr    string `json:"connected_error,omitempty"`
-	PID        int    `json:"pid,omitempty"`
-	Restarts   int    `json:"restarts,omitempty"`
-	LastError  string `json:"last_error,omitempty"`
+	Name      string     `json:"name"`
+	Managed   bool       `json:"managed"` // the daemon is running and manages it
+	Running   bool       `json:"running"` // its ffmpeg process is alive
+	PID       int        `json:"pid,omitempty"`
+	Connected bool       `json:"connected"` // actually pulling from the relay
+	ConnErr   string     `json:"connected_error,omitempty"`
+	State     string     `json:"supervisor_state,omitempty"` // running/restarting/failed/stopped
+	Restarts  int        `json:"restarts,omitempty"`
+	LastError string     `json:"last_error,omitempty"`
+	Since     *time.Time `json:"since,omitempty"`
 }
 
-// Good reports whether the platform is fully healthy: unit running and
-// actually pulling from mediamtx.
+// Good reports whether the platform is fully healthy: its ffmpeg process is
+// alive and actually pulling from the relay.
 func (p PlatformStatus) Good() bool {
-	return p.UnitExists && p.UnitError == "" &&
-		p.Active == "active" && p.Sub == "running" && p.Connected && p.ConnErr == ""
+	return p.Running && p.Connected && p.ConnErr == ""
 }
 
 // StatusReport is the full picture the CLI prints.
 type StatusReport struct {
 	Time            time.Time        `json:"time"`
+	DaemonUp        bool             `json:"daemon_up"`
 	Ingest          IngestStatus     `json:"ingest"`
 	Platforms       []PlatformStatus `json:"platforms"`
 	ExpectedReaders int              `json:"expected_readers"`
 	OK              bool             `json:"ok"`
 }
 
-// Collector keeps sampling state between Collect calls (bitrate deltas).
+// Collector keeps sampling state between Collect calls (bitrate deltas) and
+// knows where the daemon's state lives.
 type Collector struct {
 	cfg       *config.Config
 	client    *mediamtx.Client
+	stateDir  string
 	lastBytes uint64
 	lastTime  time.Time
 }
 
-// NewCollector builds a Collector for the given config.
-func NewCollector(cfg *config.Config) *Collector {
-	return &Collector{cfg: cfg, client: mediamtx.NewClient(cfg.MediaMTXAPI)}
+// NewCollector builds a Collector for the given config. stateDir is where
+// the daemon writes its pid files and state document ("" disables the
+// daemon-aware lookups).
+func NewCollector(cfg *config.Config, stateDir string) *Collector {
+	return &Collector{cfg: cfg, client: mediamtx.NewClient(cfg.MediaMTXAPI), stateDir: stateDir}
+}
+
+// daemonUp reports whether a daemon is currently serving IPC.
+func (c *Collector) daemonUp() bool {
+	if c.stateDir == "" {
+		return false
+	}
+	network, addr := state.IPCNetworkAddr(c.stateDir)
+	return daemonipc.Ping(network, addr) == nil
 }
 
 // Collect takes one snapshot of the whole chain.
 func (c *Collector) Collect(ctx context.Context) (*StatusReport, error) {
-	rep := &StatusReport{Time: time.Now(), ExpectedReaders: len(c.cfg.Platforms)}
+	up := c.daemonUp()
+	rep := &StatusReport{Time: time.Now(), DaemonUp: up, ExpectedReaders: len(c.cfg.Platforms)}
 	c.collectIngest(ctx, rep)
 	for _, p := range c.cfg.Platforms {
-		rep.Platforms = append(rep.Platforms, c.collectPlatform(ctx, p))
+		rep.Platforms = append(rep.Platforms, c.collectPlatform(p, up))
 	}
 	// Healthy means the ingest path can be read - live, or the away
 	// segment when off-air - and every platform is pulling.
@@ -160,30 +179,72 @@ func (c *Collector) collectIngest(ctx context.Context, rep *StatusReport) {
 	c.lastTime = now
 }
 
-func (c *Collector) collectPlatform(ctx context.Context, p config.Platform) PlatformStatus {
-	ps := PlatformStatus{Name: p.Name, Unit: p.Unit}
-	st, err := systemd.QueryUnit(ctx, p.Unit)
-	if err != nil {
-		ps.UnitError = err.Error()
-		return ps
-	}
-	ps.UnitExists = st.Exists
-	ps.Active = st.Active
-	ps.Sub = st.Sub
-	ps.Restarts = st.Restarts
-	ps.PID = st.PID
-	if st.Exists && st.Active == "active" && st.Sub == "running" {
-		ok, err := netmon.PIDConnectedTo(st.PID, "127.0.0.1", c.cfg.IngestPort)
-		if err != nil {
-			ps.ConnErr = err.Error()
-		} else {
-			ps.Connected = ok
+func (c *Collector) collectPlatform(p config.Platform, daemonUp bool) PlatformStatus {
+	ps := PlatformStatus{Name: p.Name, Managed: daemonUp}
+	linux := runtime.GOOS == "linux"
+
+	if daemonUp {
+		// The daemon is the source of truth: it is the parent of each ffmpeg
+		// and knows when a child dies, so its "running" state is reliable on
+		// every OS.
+		if sup := c.supervisor(); sup != nil {
+			if s, ok := sup.Platforms[p.Name]; ok {
+				ps.State = s.State
+				ps.Restarts = s.Restarts
+				ps.LastError = s.LastError
+				if !s.Since.IsZero() {
+					ps.Since = &s.Since
+				}
+				if s.State == "running" && s.PID > 0 {
+					ps.Running = true
+					ps.PID = s.PID
+					if linux {
+						// Precise per-PID check: is it actually pulling?
+						if ok, err := netmon.PIDConnectedTo(s.PID, "127.0.0.1", c.cfg.IngestPort); err != nil {
+							ps.ConnErr = err.Error()
+						} else {
+							ps.Connected = ok
+						}
+					} else {
+						// The per-PID connection check is /proc-based (Linux).
+						// Elsewhere we trust the daemon: an ffmpeg whose input
+						// is the relay would crash and be restarted if it were
+						// not connected, so "running" implies it is pulling.
+						ps.Connected = true
+					}
+				}
+			}
+		}
+	} else if linux && c.stateDir != "" {
+		// No daemon, on Linux: fall back to the pid file (an orphaned ffmpeg,
+		// if any). The /proc-based lookups do not work on other OSes, so
+		// there is no stateless platform view without the daemon there.
+		if id, ok := state.ReadPid(state.PidFile(c.stateDir, p.Name)); ok {
+			if procscan.Alive(id) && procscan.Matches(id, c.cfg.InputURL()) {
+				ps.Running = true
+				ps.PID = id
+				if ok, err := netmon.PIDConnectedTo(id, "127.0.0.1", c.cfg.IngestPort); err != nil {
+					ps.ConnErr = err.Error()
+				} else {
+					ps.Connected = ok
+				}
+			}
 		}
 	}
-	if st.Exists && !(st.Active == "active" && st.Sub == "running") {
-		ps.LastError = systemd.LastUnitError(ctx, p.Unit)
-	}
 	return ps
+}
+
+// supervisor loads the daemon's published state document, or nil when there
+// is none.
+func (c *Collector) supervisor() *state.SupervisorState {
+	if c.stateDir == "" {
+		return nil
+	}
+	st, err := state.LoadSupervisorState(c.stateDir)
+	if err != nil {
+		return nil
+	}
+	return st
 }
 
 // Events returns human-readable transition lines between prev and the
@@ -223,16 +284,19 @@ func (r *StatusReport) Events(prev *StatusReport) []string {
 
 func downReason(p PlatformStatus) string {
 	switch {
-	case !p.UnitExists:
-		return "unit not found"
-	case p.UnitError != "":
-		return "unit query failed"
-	case p.Active == "failed":
-		return "failed"
-	case p.Active != "active" || p.Sub != "running":
-		return p.Active + "/" + p.Sub
+	case p.Running && p.ConnErr != "":
+		return "connection check failed"
+	case p.Running && !p.Connected:
+		return "not connected to relay"
+	case p.State != "":
+		if p.LastError != "" {
+			return p.State + ", " + p.LastError
+		}
+		return p.State
+	case !p.Managed:
+		return "daemon not running"
 	default:
-		return "not connected"
+		return "not running"
 	}
 }
 
@@ -286,6 +350,9 @@ func (r *StatusReport) Render(color bool) string {
 		}
 		row(p.Name, st, platformDetail(p))
 	}
+	if !r.DaemonUp {
+		b.WriteString("daemon    not running (run 'multistream daemon' to supervise the re-broadcasters)\n")
+	}
 	return b.String()
 }
 
@@ -320,26 +387,30 @@ func ingestDetail(i IngestStatus, expectedReaders int, sinceLabel string, since 
 }
 
 func platformDetail(p PlatformStatus) string {
-	if !p.UnitExists {
-		return "unit not found"
-	}
-	if p.UnitError != "" {
-		return "unit query failed: " + p.UnitError
-	}
-	if p.Active == "active" && p.Sub == "running" {
+	if p.Running {
 		if p.ConnErr != "" {
-			return fmt.Sprintf("running, connected check failed (%s), restarts %d", p.ConnErr, p.Restarts)
+			return fmt.Sprintf("running, connection check failed (%s), restarts %d", p.ConnErr, p.Restarts)
 		}
 		if !p.Connected {
-			return fmt.Sprintf("running, not connected to mediamtx, restarts %d", p.Restarts)
+			return fmt.Sprintf("running, not connected to relay, restarts %d", p.Restarts)
 		}
-		return fmt.Sprintf("connected, restarts %d", p.Restarts)
+		d := fmt.Sprintf("connected, restarts %d", p.Restarts)
+		if p.Since != nil {
+			d += ", up " + humanDuration(time.Since(*p.Since))
+		}
+		return d
 	}
-	detail := fmt.Sprintf("%s/%s, restarts %d", p.Active, p.Sub, p.Restarts)
-	if p.LastError != "" {
-		detail += ", " + p.LastError
+	if p.State != "" {
+		d := fmt.Sprintf("%s, restarts %d", p.State, p.Restarts)
+		if p.LastError != "" {
+			d += ", " + p.LastError
+		}
+		return d
 	}
-	return detail
+	if !p.Managed {
+		return "not running (daemon not running)"
+	}
+	return "not running"
 }
 
 func fmtKbps(kbps int) string {

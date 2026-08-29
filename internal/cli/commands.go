@@ -6,13 +6,16 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/xlip/multistream/internal/check"
 	"github.com/xlip/multistream/internal/config"
+	"github.com/xlip/multistream/internal/daemonipc"
 	"github.com/xlip/multistream/internal/report"
-	"github.com/xlip/multistream/internal/systemd"
+	"github.com/xlip/multistream/internal/state"
+	"github.com/xlip/multistream/internal/supervisor"
 )
 
 // usageText is printed by -h/--help and on unknown commands.
@@ -22,13 +25,14 @@ Usage:
   multistream [status] [flags]        one-shot status (default command)
   multistream status --watch          live refresh, prints events on change
   multistream status --json           machine-readable (lines in --watch)
-  multistream check                   probe API, units, endpoints, key files
-  multistream restart <platform>      restart one re-broadcaster
+  multistream check                   probe API, daemon, endpoints, key files
+  multistream restart <platform>      ask the daemon to restart one re-broadcaster
+  multistream daemon                  run the supervisor (spawn + watch ffmpeg)
   multistream config                  show effective config
 
 Flags:
-  -config string    config file (default: $MULTISTREAM_CONFIG,
-                    /etc/multistream/config.json, ./config.json)
+  -config string    config file (default: $MULTISTREAM_CONFIG, per-user config
+                    dir, /etc/multistream/config.json, ./config.json)
   -version          print version and exit
   -h, --help        show this help
 
@@ -40,6 +44,16 @@ status flags:
 
 Exit codes: 0 all healthy, 1 something down, 2 usage/config error.
 `
+
+// stateDirOrEmpty resolves the state directory path, returning "" on error
+// (read-only commands still work, just without daemon awareness).
+func stateDirOrEmpty() string {
+	d, err := state.DirPath()
+	if err != nil {
+		return ""
+	}
+	return d
+}
 
 func runStatus(cfg *config.Config, args []string) int {
 	watch := false
@@ -73,7 +87,7 @@ func runStatus(cfg *config.Config, args []string) int {
 	}
 
 	colored := report.ColorEnabled(noColor)
-	c := report.NewCollector(cfg)
+	c := report.NewCollector(cfg, stateDirOrEmpty())
 	ctx := context.Background()
 
 	if !watch {
@@ -133,6 +147,9 @@ func runCheck(cfg *config.Config) int {
 	return check.Run(context.Background(), cfg)
 }
 
+// runRestart asks the running daemon to restart one platform. It refuses
+// when the daemon is not running, since a restart without a supervisor
+// would leave the re-broadcaster unsupervised.
 func runRestart(cfg *config.Config, args []string) int {
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: multistream restart <platform>")
@@ -143,11 +160,42 @@ func runRestart(cfg *config.Config, args []string) int {
 		fmt.Fprintf(os.Stderr, "multistream: unknown platform %q (see: multistream config)\n", args[0])
 		return 2
 	}
-	if err := systemd.RestartUnit(context.Background(), p.Unit); err != nil {
-		fmt.Fprintln(os.Stderr, "multistream:", err)
+	dir := stateDirOrEmpty()
+	if dir == "" {
+		fmt.Fprintln(os.Stderr, "multistream: cannot resolve state directory")
 		return 1
 	}
-	fmt.Printf("%s restarted\n", systemd.UnitName(p.Unit))
+	network, addr := state.IPCNetworkAddr(dir)
+	if err := daemonipc.Restart(network, addr, p.Name); err != nil {
+		fmt.Fprintf(os.Stderr, "multistream: cannot restart %s: %v\n", p.Name, err)
+		fmt.Fprintln(os.Stderr, "  the daemon is not running - a restart here would be unsupervised.")
+		fmt.Fprintln(os.Stderr, "  start it with: multistream daemon")
+		return 1
+	}
+	fmt.Printf("%s restart requested\n", p.Name)
+	return 0
+}
+
+// runDaemon runs the supervisor in the foreground until interrupted.
+func runDaemon(cfg *config.Config) int {
+	dir, err := state.StateDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "multistream:", err)
+		return 2
+	}
+	sup, err := supervisor.New(cfg, dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "multistream daemon:", err)
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	fmt.Printf("multistream daemon running (state %s), platforms: %s\n",
+		dir, strings.Join(platformNames(cfg), ", "))
+	if err := sup.Start(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "multistream daemon:", err)
+		return 1
+	}
 	return 0
 }
 
@@ -156,6 +204,9 @@ func runConfig(cfg *config.Config) {
 	fmt.Printf("mediamtx api: %s\n", cfg.MediaMTXAPI)
 	fmt.Printf("ingest:       %s (port %d)\n", cfg.IngestPath, cfg.IngestPort)
 	fmt.Printf("refresh:      %ds\n", cfg.RefreshSec)
+	fmt.Printf("ffmpeg:       %s\n", cfg.FFmpegPath)
+	fmt.Printf("supervisor:   restart after %ds, limit %d restarts in %ds\n",
+		cfg.RestartSec, cfg.StartLimitBurst, cfg.StartLimitIntervalSec)
 	if cfg.AwayFile != "" {
 		fmt.Printf("away file:    %s\n", cfg.AwayFile)
 	}
@@ -165,10 +216,18 @@ func runConfig(cfg *config.Config) {
 	fmt.Println("platforms:")
 	for i := range cfg.Platforms {
 		p := &cfg.Platforms[i]
-		fmt.Printf("  %-10s unit=%-28s push=%s", p.Name, systemd.UnitName(p.Unit), p.PushURL)
+		fmt.Printf("  %-10s push=%s", p.Name, p.PushURL)
 		if kf := cfg.KeyFile(p); kf != "" {
 			fmt.Printf("  key=%s", kf)
 		}
 		fmt.Println()
 	}
+}
+
+func platformNames(cfg *config.Config) []string {
+	names := make([]string, len(cfg.Platforms))
+	for i := range cfg.Platforms {
+		names[i] = cfg.Platforms[i].Name
+	}
+	return names
 }
