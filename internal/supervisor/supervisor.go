@@ -274,7 +274,8 @@ func (s *Supervisor) writePid(p *platform) {
 	if pid <= 0 {
 		return
 	}
-	state.WriteFile(state.PidFile(s.dir, p.name), []byte(strconv.Itoa(pid)))
+	// Best effort: the pid file only serves the stateless status fallback.
+	_ = state.WriteFile(state.PidFile(s.dir, p.name), []byte(strconv.Itoa(pid)))
 }
 
 func (s *Supervisor) removePid(p *platform) {
@@ -323,7 +324,8 @@ func (s *Supervisor) publish() {
 		return
 	}
 	data = append(data, '\n')
-	state.WriteFile(state.SupervisorFile(s.dir), data)
+	// Best effort: readers tolerate a missing or stale state document.
+	_ = state.WriteFile(state.SupervisorFile(s.dir), data)
 }
 
 // platform is the supervisor's per-platform runtime state.

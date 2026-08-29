@@ -126,16 +126,22 @@ func TestReadPid(t *testing.T) {
 	if _, ok := ReadPid(p); ok {
 		t.Error("missing pid file should not parse")
 	}
-	os.WriteFile(p, []byte("4321"), 0o600)
+	if err := os.WriteFile(p, []byte("4321"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	n, ok := ReadPid(p)
 	if !ok || n != 4321 {
 		t.Errorf("ReadPid = (%d, %v), want (4321, true)", n, ok)
 	}
-	os.WriteFile(p, []byte("not-a-number"), 0o600)
+	if err := os.WriteFile(p, []byte("not-a-number"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := ReadPid(p); ok {
 		t.Error("non-numeric pid file should not parse")
 	}
-	os.WriteFile(p, []byte("0"), 0o600)
+	if err := os.WriteFile(p, []byte("0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := ReadPid(p); ok {
 		t.Error("zero pid should not parse")
 	}

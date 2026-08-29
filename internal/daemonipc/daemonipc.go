@@ -98,7 +98,9 @@ func (s *Server) accept(ln net.Listener) {
 
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(timeout))
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return
+	}
 	var req Request
 	if err := readFrame(conn, &req); err != nil {
 		return
@@ -116,7 +118,8 @@ func (s *Server) handle(conn net.Conn) {
 	default:
 		resp = Response{OK: false, Error: "unknown op " + req.Op}
 	}
-	writeFrame(conn, resp)
+	// Best effort: if the write fails the client times out and retries.
+	_ = writeFrame(conn, resp)
 }
 
 // Close stops the listener and removes the endpoint file.
@@ -139,7 +142,9 @@ func Do(network, address string, req Request) (Response, error) {
 		return Response{}, err
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(timeout))
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return Response{}, err
+	}
 	if err := writeFrame(conn, req); err != nil {
 		return Response{}, err
 	}

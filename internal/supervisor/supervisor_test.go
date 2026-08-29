@@ -30,7 +30,9 @@ func TestExpandPushURLNoTemplate(t *testing.T) {
 func TestExpandPushURLResolves(t *testing.T) {
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, "twitch.env")
-	os.WriteFile(keyFile, []byte("TWITCH_KEY=live_secret_123\n"), 0o600)
+	if err := os.WriteFile(keyFile, []byte("TWITCH_KEY=live_secret_123\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	got, secrets, err := expandPushURL("rtmp://live.twitch.tv/app/${TWITCH_KEY}", keyFile)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +54,9 @@ func TestExpandPushURLMissingKeyFile(t *testing.T) {
 func TestExpandPushURLMissingVariable(t *testing.T) {
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, "twitch.env")
-	os.WriteFile(keyFile, []byte("OTHER=x\n"), 0o600)
+	if err := os.WriteFile(keyFile, []byte("OTHER=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := expandPushURL("rtmp://h/${KEY}", keyFile); err == nil {
 		t.Error("want error for a template with no matching key")
 	}
@@ -61,7 +65,9 @@ func TestExpandPushURLMissingVariable(t *testing.T) {
 func TestReadEnvFile(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "k.env")
-	os.WriteFile(p, []byte("# comment\nA=1\nB = \"quoted\" \nC='single'\n\nbadline\nD=\n"), 0o600)
+	if err := os.WriteFile(p, []byte("# comment\nA=1\nB = \"quoted\" \nC='single'\n\nbadline\nD=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	vars, err := readEnvFile(p)
 	if err != nil {
 		t.Fatal(err)

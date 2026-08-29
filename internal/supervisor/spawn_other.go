@@ -20,6 +20,8 @@ func killProcess(cmd *exec.Cmd) {
 		return
 	}
 	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-		cmd.Process.Kill()
+		// Group kill failed (e.g. the child already exited); try the
+		// process directly.
+		_ = cmd.Process.Kill()
 	}
 }
