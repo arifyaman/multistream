@@ -122,26 +122,18 @@ jobs:
           cp npm/install.js stage/install.js
           cp npm/bin/multistream.js stage/bin/multistream.js
           cp npm/README.md stage/README.md
-      - name: Check npm trusted publishing
+      - name: Pack and publish
         # Auth via npm trusted publishing (OIDC): no token, the runner's
         # identity is verified by npm against the trusted publisher config
-        # (npmjs.com -> Publishing -> Trusted publishers). Probe it first so
-        # a missing/expired config fails with a clear error.
-        run: |
-          who="$(npm whoami)" || {
-            echo "::error::npm authentication failed - check the trusted publisher config on npmjs.com (Publishing -> Trusted publishers) and that the package is owned by the linked account"
-            exit 1
-          }
-          echo "npm authenticated as ${who}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pack and publish
+        # (npmjs.com -> Publishing -> Trusted publishers). The token is
+        # scoped to publishing only - it cannot do registry reads, so the
+        # idempotency check below runs without it.
         run: |
           cd stage
           version="$(node -p "require('./package.json').version")"
           # Idempotent: a re-run (or a manual publish) of an already-published
           # version must not fail the release.
-          if npm view "@arifyaman/multistream@${version}" version >/dev/null 2>&1; then
+          if NODE_AUTH_TOKEN= npm view "@arifyaman/multistream@${version}" version >/dev/null 2>&1; then
             echo "v${version} is already published on npm; skipping"
             exit 0
           fi
