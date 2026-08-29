@@ -126,24 +126,39 @@ jobs:
         # Auth via npm trusted publishing (OIDC): no token, the runner's
         # identity is verified by npm against the trusted publisher config
         # (npmjs.com -> Publishing -> Trusted publishers). The token is
-        # scoped to publishing only - it cannot do registry reads, so the
-        # idempotency check below runs without it.
+        # scoped to publish/dist-tag only - it cannot do registry reads, so
+        # the reads below run without it.
         run: |
           cd stage
           version="$(node -p "require('./package.json').version")"
+          prerelease=0
+          [[ "${GITHUB_REF_NAME}" == *-* ]] && prerelease=1
           # Idempotent: a re-run (or a manual publish) of an already-published
           # version must not fail the release.
           if NODE_AUTH_TOKEN= npm view "@arifyaman/multistream@${version}" version >/dev/null 2>&1; then
-            echo "v${version} is already published on npm; skipping"
-            exit 0
-          fi
-          npm pack
-          # Pre-release tags (vX.Y.Z-*) go to the "alpha" dist-tag so plain
-          # "npm install" keeps resolving the latest stable version.
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
-            npm publish --access public --provenance --tag alpha
+            echo "v${version} is already published on npm; skipping publish"
           else
-            npm publish --access public --provenance
+            npm pack
+            # Pre-release tags (vX.Y.Z-*) go to the "alpha" dist-tag so plain
+            # "npm install" keeps resolving the latest stable version.
+            if [[ "${prerelease}" == 1 ]]; then
+              npm publish --access public --provenance --tag alpha
+            else
+              npm publish --access public --provenance
+            fi
+          fi
+          # While pre-1.0, keep "latest" on the newest alpha so a plain
+          # "npm install" tracks alphas. Never demote a real stable: only
+          # move the tag if current latest is missing or itself a prerelease.
+          # Requires the "dist-tag" permission on the trusted publisher config.
+          if [[ "${prerelease}" == 1 ]]; then
+            cur="$(NODE_AUTH_TOKEN= npm view @arifyaman/multistream@latest version 2>/dev/null || true)"
+            if [[ -z "${cur}" || "${cur}" == *-* ]]; then
+              npm dist-tag add "@arifyaman/multistream@${version}" latest
+              echo "moved 'latest' from '${cur:-<none>}' to ${version}"
+            else
+              echo "keeping 'latest' at stable ${cur}"
+            fi
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
