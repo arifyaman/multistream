@@ -269,14 +269,21 @@ jobs:
               echo "mediamtx_commit=${MEDIAMTX_COMMIT}"
               echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             } > "$d/VERSIONS"
-            tar -czf "multistream-runtime-$t.tar.gz" -C rt "$t"
+            # Underscore before the target name: the SHA256SUMS globs and
+            # npm's make-package.mjs expect multistream-runtime_<os>_<arch>.tar.gz
+            tar -czf "multistream-runtime_${t}.tar.gz" -C rt "$t"
           done
           if [ -n "$missing" ]; then
             echo "Missing platforms:$missing" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Write SHA256SUMS
         run: |
-          sha256sum multistream-runtime_*.tar.gz | sort -k2 > SHA256SUMS-runtime.txt
+          set -euo pipefail
+          # No pipe: a glob that matches nothing must fail the step, not
+          # produce an empty (and silently consumed) sums file.
+          sha256sum multistream-runtime_*.tar.gz > SHA256SUMS-runtime.txt
+          sort -o SHA256SUMS-runtime.txt SHA256SUMS-runtime.txt
+          [ -s SHA256SUMS-runtime.txt ] || { echo "ERROR: no runtime tarballs found" >&2; exit 1; }
           cat SHA256SUMS-runtime.txt
       - name: Upload runtime release
         env:
