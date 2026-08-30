@@ -47,7 +47,7 @@ jobs:
   ffmpeg-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Register QEMU for cross-arch builds
         uses: docker/setup-qemu-action@v3
         with:
@@ -69,7 +69,7 @@ jobs:
               sh -c 'mkdir -p /dest && cp /out/ffmpeg /dest/ffmpeg'
           done
           ls -lh dist/linux_*/ffmpeg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ffmpeg-linux
           path: dist/linux_*/ffmpeg
@@ -78,7 +78,7 @@ jobs:
   ffmpeg-windows:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install mingw-w64 cross toolchains
         run: |
           sudo apt-get update
@@ -113,7 +113,7 @@ jobs:
             tail -n 3 build-win-arm64.log
           fi
           ls -lh dist/windows_*/ffmpeg.exe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ffmpeg-windows
           path: dist/windows_*/ffmpeg.exe
@@ -122,7 +122,7 @@ jobs:
   ffmpeg-darwin:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build darwin/arm64 (native)
         env:
           TARGET_OS: macosx
@@ -156,7 +156,7 @@ jobs:
         run: |
           ls -lh dist/darwin_*/ffmpeg
           file dist/darwin_*/ffmpeg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ffmpeg-darwin
           path: dist/darwin_*/ffmpeg
@@ -165,8 +165,8 @@ jobs:
   mediamtx:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
       - name: Build mediamtx for all six targets
@@ -180,7 +180,7 @@ jobs:
             exit 1
           }
           tail -n 5 build-medi-mtx.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mediamtx
           path: dist/mediamtx-*
@@ -190,15 +190,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: [ffmpeg-linux, mediamtx]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Artifact entries are stored relative to the glob's base dir
       # (linux_amd64/ffmpeg, mediamtx-linux-amd64, ...), so extract into
       # dist/ to reconstruct the dist/... layout the test expects.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ffmpeg-linux
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: mediamtx
           path: dist
@@ -227,17 +227,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: [ffmpeg-linux, ffmpeg-windows, ffmpeg-darwin, mediamtx, smoke]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Artifact entries are stored relative to each glob's base dir
       # (linux_amd64/ffmpeg, darwin_arm64/ffmpeg, mediamtx-linux-amd64,
       # ...), so extract into dist/ to reconstruct the dist/... layout
       # the assembly loop expects.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: ffmpeg-*
           merge-multiple: true
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: mediamtx
           path: dist
@@ -314,7 +314,7 @@ jobs:
             exit 1
           }
           cat upload.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: runtime
           path: |

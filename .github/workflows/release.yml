@@ -23,8 +23,8 @@ jobs:
           - { goos: windows, goarch: amd64 }
           - { goos: windows, goarch: arm64 }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build
@@ -57,13 +57,13 @@ jobs:
       # matrix jobs do not reliably merge, so consumers download with
       # pattern + merge-multiple instead.
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.goos }}_${{ matrix.goarch }}
           path: dist/*
           if-no-files-found: error
       - name: Upload checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sha256sums-${{ matrix.goos }}_${{ matrix.goarch }}
           path: sha256sums/*
@@ -78,8 +78,8 @@ jobs:
       # Bump when the ffbuild workflow publishes a new runtime-v* release.
       RUNTIME_TAG: runtime-v1
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
@@ -130,7 +130,7 @@ jobs:
             echo "Deleting stale release ${id}"
             gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${id}"
           done
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/multistream_*
@@ -148,12 +148,12 @@ jobs:
       # Bump here when the ffbuild workflow publishes a new runtime-v* release.
       RUNTIME_TAG: runtime-v1
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: sha256sums-*
           merge-multiple: true
