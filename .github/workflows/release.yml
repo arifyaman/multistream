@@ -139,9 +139,9 @@ jobs:
       - name: Pack and publish
         # Auth via npm trusted publishing (OIDC): no token, the runner's
         # identity is verified by npm against the trusted publisher config
-        # (npmjs.com -> Publishing -> Trusted publishers). The token is
-        # scoped to publish/dist-tag only - it cannot do registry reads, so
-        # the reads below run without it.
+        # (npmjs.com -> Publishing -> Trusted publishers). The publisher is
+        # scoped to publish only - it cannot do registry reads or move
+        # dist-tags, so the read below runs without it.
         run: |
           cd stage
           version="$(node -p "require('./package.json').version")"
@@ -155,33 +155,15 @@ jobs:
             npm pack
             # Pre-release tags (vX.Y.Z-*) go to the "alpha" dist-tag so plain
             # "npm install" keeps resolving the latest stable version.
+            # Dist-tags are deliberately NOT moved here: the trusted
+            # publisher is publish-scoped only. A stable publish (no --tag)
+            # sets "latest" by itself; while pre-1.0, moving "latest" to a
+            # new alpha is a manual step:
+            #   npm dist-tag add @arifyaman/multistream@<version> latest
             if [[ "${prerelease}" == 1 ]]; then
               npm publish --access public --provenance --tag alpha
             else
               npm publish --access public --provenance
-            fi
-          fi
-          # While pre-1.0, keep "latest" on the newest alpha so a plain
-          # "npm install" tracks alphas. Never demote a real stable: only
-          # move the tag if current latest is missing or itself a prerelease.
-          # Requires the "dist-tag" permission on the trusted publisher config.
-          if [[ "${prerelease}" == 1 ]]; then
-            cur="$(NODE_AUTH_TOKEN= npm view @arifyaman/multistream@latest version 2>/dev/null || true)"
-            if [[ -z "${cur}" || "${cur}" == *-* ]]; then
-              # npm registry operations can fail transiently. The publish
-              # above is already done, so retry once; the step is idempotent,
-              # a job re-run skips the publish and only re-does this move.
-              if ! npm dist-tag add "@arifyaman/multistream@${version}" latest; then
-                echo "npm dist-tag add failed; retrying in 5s ..."
-                sleep 5
-                if ! npm dist-tag add "@arifyaman/multistream@${version}" latest; then
-                  echo "::error::v${version} is published on npm, but the 'latest' dist-tag still points to '${cur:-<none>}' (the dist-tag move failed). Re-run the npm job to finish it."
-                  exit 1
-                fi
-              fi
-              echo "moved 'latest' from '${cur:-<none>}' to ${version}"
-            else
-              echo "keeping 'latest' at stable ${cur}"
             fi
           fi
         env:
