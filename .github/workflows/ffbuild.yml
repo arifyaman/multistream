@@ -47,6 +47,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Register QEMU for cross-arch builds
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
       - name: Build linux/amd64 and linux/arm64 (musl, static)
         run: |
           for p in amd64 arm64; do
@@ -71,11 +75,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc-x86-64-w64-mingw32 g++-x86-64-w64-mingw32 binutils-x86-64-w64-mingw32
-          # The aarch64 port is not in every Ubuntu release; degrade to
-          # shipping without windows/arm64 instead of failing the bundle.
-          if ! sudo apt-get install -y --no-install-recommends \
-              gcc-aarch64-w64-mingw32 g++-aarch64-w64-mingw32 binutils-aarch64-w64-mingw32; then
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          # There is no aarch64 mingw port in Ubuntu; degrade to shipping
+          # without windows/arm64 instead of failing the bundle (users can
+          # install ffmpeg + mediamtx system-wide there).
+          if ! sudo apt-get install -y --no-install-recommends gcc-mingw-w64-aarch64; then
             echo "aarch64 mingw toolchain unavailable; skipping windows/arm64"
             echo "SKIP_ARM64=1" >> "$GITHUB_ENV"
           fi
@@ -135,6 +139,7 @@ jobs:
           go-version: "1.26"
       - name: Build mediamtx for all six targets
         env:
+          SRCDIR: ${{ github.workspace }}/mtx-src
           OUTDIR: dist
         run: bash ffbuild/build-mediamtx.sh
       - uses: actions/upload-artifact@v4

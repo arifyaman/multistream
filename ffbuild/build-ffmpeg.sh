@@ -30,7 +30,8 @@ SRC="${SRCDIR}/ffmpeg-${VERSION}"
 mkdir -p "$SRCDIR"
 cd "$SRCDIR"
 if [ ! -f "ffmpeg-${VERSION}.tar.xz" ]; then
-  wget -q "https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz"
+  curl -fsSL -o "ffmpeg-${VERSION}.tar.xz" \
+    "https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz"
 fi
 actual="$(sha256sum "ffmpeg-${VERSION}.tar.xz" | awk '{print $1}')"
 if [ "$actual" != "$SRC_SHA256" ]; then

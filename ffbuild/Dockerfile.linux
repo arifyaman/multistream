@@ -4,7 +4,8 @@
 # infrequently run workflow.
 FROM alpine:3.21
 
-RUN apk add --no-cache build-base file
+# bash: the build script is bash (alpine ships ash only).
+RUN apk add --no-cache build-base file bash
 
 COPY build-ffmpeg.sh /opt/build-ffmpeg.sh
 

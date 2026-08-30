@@ -12,13 +12,15 @@
 # Env inputs:
 #   MEDIAMTX_VERSION  default v1.20.1
 #   MEDIAMTX_COMMIT   commit the tag must resolve to (required)
-#   OUTDIR            default /out
+#   SRCDIR            default ./src
+#   OUTDIR            default ./out
 set -euo pipefail
 
 VERSION="${MEDIAMTX_VERSION:-v1.20.1}"
 : "${MEDIAMTX_COMMIT:?MEDIAMTX_COMMIT is required}"
-OUTDIR="${OUTDIR:-/out}"
-SRC=/src/mediamtx
+SRCDIR="${SRCDIR:-$PWD/src}"
+OUTDIR="${OUTDIR:-$PWD/out}"
+SRC="$SRCDIR/mediamtx"
 
 rm -rf "$SRC"
 git clone --quiet --depth 1 --branch "$VERSION" https://github.com/bluenviron/mediamtx "$SRC"
