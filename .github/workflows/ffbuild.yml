@@ -190,17 +190,17 @@ jobs:
     needs: [ffmpeg-linux, mediamtx]
     steps:
       - uses: actions/checkout@v4
-      # Artifacts preserve their workspace-relative layout (dist/...), so
-      # extract at the workspace root, not into dist/ (that would nest
-      # the files under dist/dist/...).
+      # Artifact entries are stored relative to the glob's base dir
+      # (linux_amd64/ffmpeg, mediamtx-linux-amd64, ...), so extract into
+      # dist/ to reconstruct the dist/... layout the test expects.
       - uses: actions/download-artifact@v4
         with:
           name: ffmpeg-linux
-          path: ${{ github.workspace }}
+          path: dist
       - uses: actions/download-artifact@v4
         with:
           name: mediamtx
-          path: ${{ github.workspace }}
+          path: dist
       - name: Install ffprobe (verification only, not shipped)
         run: |
           sudo apt-get update
@@ -222,17 +222,19 @@ jobs:
     needs: [ffmpeg-linux, ffmpeg-windows, ffmpeg-darwin, mediamtx, smoke]
     steps:
       - uses: actions/checkout@v4
-      # Extract at the workspace root: artifact entries are already
-      # workspace-relative (dist/...), so a dist/ target would nest them.
+      # Artifact entries are stored relative to each glob's base dir
+      # (linux_amd64/ffmpeg, darwin_arm64/ffmpeg, mediamtx-linux-amd64,
+      # ...), so extract into dist/ to reconstruct the dist/... layout
+      # the assembly loop expects.
       - uses: actions/download-artifact@v4
         with:
           pattern: ffmpeg-*
           merge-multiple: true
-          path: ${{ github.workspace }}
+          path: dist
       - uses: actions/download-artifact@v4
         with:
           name: mediamtx
-          path: ${{ github.workspace }}
+          path: dist
       - name: Assemble per-platform runtime bundles
         run: |
           set -euo pipefail

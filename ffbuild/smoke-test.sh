@@ -58,6 +58,19 @@ if ! kill -0 "$MTX_PID" 2>/dev/null; then
   exit 1
 fi
 
+# Wait for the API before anything connects to it. A cold start on a small
+# runner can take a few seconds, and the relay must connect to a live
+# mediamtx exactly like the daemon does.
+for i in $(seq 1 20); do
+  if curl -s http://127.0.0.1:9997/v3/paths/list >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+if ! curl -s http://127.0.0.1:9997/v3/paths/list >/dev/null 2>&1; then
+  echo "FAIL: mediamtx API did not come up within 20s"
+  echo "--- mediamtx.log ---"; cat "$WORK/mediamtx.log"
+  exit 1
+fi
+
 # re-broadcaster: exactly the daemon's command shape (A -> B, -c copy).
 # It starts while path A serves the away segment, like the daemon does.
 "$FFMPEG" -hide_banner -loglevel warning \
