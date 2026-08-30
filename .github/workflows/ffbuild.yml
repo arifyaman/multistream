@@ -34,11 +34,13 @@ on:
 permissions:
   contents: write
 
+# Tag-triggered runs have no workflow inputs, so every value falls back to
+# its default (keep these in sync with the input defaults above).
 env:
-  FFMPEG_VERSION: ${{ inputs.ffmpeg_version }}
-  SRC_SHA256: ${{ inputs.src_sha256 }}
-  MEDIAMTX_VERSION: ${{ inputs.mediamtx_version }}
-  MEDIAMTX_COMMIT: ${{ inputs.mediamtx_commit }}
+  FFMPEG_VERSION: ${{ inputs.ffmpeg_version || '9.0' }}
+  SRC_SHA256: ${{ inputs.src_sha256 || '7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52' }}
+  MEDIAMTX_VERSION: ${{ inputs.mediamtx_version || 'v1.20.1' }}
+  MEDIAMTX_COMMIT: ${{ inputs.mediamtx_commit || '883194a19b7244355c9bc975c0574c9842733637' }}
 
 jobs:
   ffmpeg-linux:
@@ -69,21 +71,30 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc-x86-64-w64-mingw32 g++-x86-64-w64-mingw32 binutils-x86-64-w64-mingw32 \
-            gcc-aarch64-w64-mingw32 g++-aarch64-w64-mingw32 binutils-aarch64-w64-mingw32
+            gcc-x86-64-w64-mingw32 g++-x86-64-w64-mingw32 binutils-x86-64-w64-mingw32
+          # The aarch64 port is not in every Ubuntu release; degrade to
+          # shipping without windows/arm64 instead of failing the bundle.
+          if ! sudo apt-get install -y --no-install-recommends \
+              gcc-aarch64-w64-mingw32 g++-aarch64-w64-mingw32 binutils-aarch64-w64-mingw32; then
+            echo "aarch64 mingw toolchain unavailable; skipping windows/arm64"
+            echo "SKIP_ARM64=1" >> "$GITHUB_ENV"
+          fi
       - name: Build windows/amd64 and windows/arm64
         run: |
           export TARGET_OS=windows SRCDIR="$PWD/src-win"
           mkdir -p "$SRCDIR"
           FFMPEG_ARCH=x86_64 CROSS_PREFIX=x86_64-w64-mingw32- \
             OUTDIR=dist/windows_amd64 OUTNAME=ffmpeg.exe bash ffbuild/build-ffmpeg.sh
-          FFMPEG_ARCH=aarch64 CROSS_PREFIX=aarch64-w64-mingw32- \
-            OUTDIR=dist/windows_arm64 OUTNAME=ffmpeg.exe bash ffbuild/build-ffmpeg.sh
+          if [ -z "${SKIP_ARM64:-}" ]; then
+            FFMPEG_ARCH=aarch64 CROSS_PREFIX=aarch64-w64-mingw32- \
+              OUTDIR=dist/windows_arm64 OUTNAME=ffmpeg.exe bash ffbuild/build-ffmpeg.sh
+          fi
           ls -lh dist/windows_*/ffmpeg.exe
       - uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-windows
           path: dist/windows_*/ffmpeg.exe
+          if-no-files-found: error
 
   ffmpeg-darwin:
     runs-on: macos-latest
@@ -172,11 +183,17 @@ jobs:
       - name: Assemble per-platform runtime bundles
         run: |
           set -euo pipefail
+          missing=""
           for t in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64 windows_arm64; do
             os="${t%_*}"; arch="${t#*_}"
-            d="rt/$t"; mkdir -p "$d/bin"
             ext=""
             [ "$os" = windows ] && ext=".exe"
+            if [ ! -f "dist/$t/ffmpeg$ext" ] || [ ! -f "dist/mediamtx-$os-$arch$ext" ]; then
+              echo "WARNING: skipping $t (ffmpeg or mediamtx binary missing)"
+              missing="$missing $t"
+              continue
+            fi
+            d="rt/$t"; mkdir -p "$d/bin"
             cp "dist/$t/ffmpeg$ext" "$d/bin/ffmpeg$ext"
             cp "dist/mediamtx-$os-$arch$ext" "$d/bin/mediamtx$ext"
             cp ffbuild/LICENSE-ffmpeg.txt "$d/LICENSE-ffmpeg.txt"
@@ -189,6 +206,9 @@ jobs:
             } > "$d/VERSIONS"
             tar -czf "multistream-runtime-$t.tar.gz" -C rt "$t"
           done
+          if [ -n "$missing" ]; then
+            echo "Missing platforms:$missing" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Write SHA256SUMS
         run: |
           sha256sum multistream-runtime_*.tar.gz | sort -k2 > SHA256SUMS-runtime.txt
