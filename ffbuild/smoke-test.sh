@@ -16,6 +16,12 @@ FFMPEG="$(abs "$FFMPEG")"
 MEDIAMTX="$(abs "$MEDIAMTX")"
 SAMPLE="$(abs "$SAMPLE")"
 AWAY="$(abs "$AWAY")"
+for f in "$FFMPEG" "$MEDIAMTX" "$SAMPLE" "$AWAY"; do
+  if [ ! -f "$f" ]; then
+    echo "FAIL: required input missing: $f"
+    exit 1
+  fi
+done
 WORK="$(mktemp -d)"
 # The || true matters: on the success path all jobs are already reaped, so
 # kill gets no arguments and errors; under set -e that would override the
@@ -46,6 +52,11 @@ EOF
 "$MEDIAMTX" "$WORK/mediamtx.yml" > "$WORK/mediamtx.log" 2>&1 &
 MTX_PID=$!
 sleep 1
+if ! kill -0 "$MTX_PID" 2>/dev/null; then
+  echo "FAIL: mediamtx exited at startup"
+  echo "--- mediamtx.log ---"; cat "$WORK/mediamtx.log"
+  exit 1
+fi
 
 # re-broadcaster: exactly the daemon's command shape (A -> B, -c copy).
 # It starts while path A serves the away segment, like the daemon does.
@@ -61,10 +72,17 @@ sleep 2
 PUB_PID=$!
 
 # wait until both paths are online (live publisher, not the away segment)
+# The || echo keeps a refused connection from killing the script under
+# set -e: an unreachable API reads as "offline" and the loop keeps going.
+online() {
+  curl -s "http://127.0.0.1:9997/v3/paths/get/$1" 2>/dev/null \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['online'])" 2>/dev/null \
+    || echo "offline"
+}
 for i in $(seq 1 30); do
   sleep 1
-  a_on=$(curl -s http://127.0.0.1:9997/v3/paths/get/live/a | python3 -c "import json,sys; print(json.load(sys.stdin)['online'])")
-  b_on=$(curl -s http://127.0.0.1:9997/v3/paths/get/live/b | python3 -c "import json,sys; print(json.load(sys.stdin)['online'])")
+  a_on="$(online live/a)"
+  b_on="$(online live/b)"
   if [[ "$a_on" == "True" && "$b_on" == "True" ]]; then break; fi
 done
 if [[ "$a_on" != "True" || "$b_on" != "True" ]]; then
@@ -76,7 +94,8 @@ if [[ "$a_on" != "True" || "$b_on" != "True" ]]; then
 fi
 
 # path A must have exactly 1 reader (the re-broadcaster)
-readers=$(curl -s http://127.0.0.1:9997/v3/paths/get/live/a | python3 -c "import json,sys; print(len(json.load(sys.stdin)['readers']))")
+readers="$(curl -s http://127.0.0.1:9997/v3/paths/get/live/a 2>/dev/null \
+  | python3 -c "import json,sys; print(len(json.load(sys.stdin)['readers']))" 2>/dev/null || echo 0)"
 if [[ "$readers" != "1" ]]; then
   echo "FAIL: path live/a readers = $readers, want 1"
   exit 1

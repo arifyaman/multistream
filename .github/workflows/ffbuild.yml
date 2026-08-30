@@ -190,14 +190,17 @@ jobs:
     needs: [ffmpeg-linux, mediamtx]
     steps:
       - uses: actions/checkout@v4
+      # Artifacts preserve their workspace-relative layout (dist/...), so
+      # extract at the workspace root, not into dist/ (that would nest
+      # the files under dist/dist/...).
       - uses: actions/download-artifact@v4
         with:
           name: ffmpeg-linux
-          path: dist
+          path: ${{ github.workspace }}
       - uses: actions/download-artifact@v4
         with:
           name: mediamtx
-          path: dist
+          path: ${{ github.workspace }}
       - name: Install ffprobe (verification only, not shipped)
         run: |
           sudo apt-get update
@@ -219,15 +222,17 @@ jobs:
     needs: [ffmpeg-linux, ffmpeg-windows, ffmpeg-darwin, mediamtx, smoke]
     steps:
       - uses: actions/checkout@v4
+      # Extract at the workspace root: artifact entries are already
+      # workspace-relative (dist/...), so a dist/ target would nest them.
       - uses: actions/download-artifact@v4
         with:
           pattern: ffmpeg-*
           merge-multiple: true
-          path: dist
+          path: ${{ github.workspace }}
       - uses: actions/download-artifact@v4
         with:
           name: mediamtx
-          path: dist
+          path: ${{ github.workspace }}
       - name: Assemble per-platform runtime bundles
         run: |
           set -euo pipefail
