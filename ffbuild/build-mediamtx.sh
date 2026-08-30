@@ -20,6 +20,12 @@ VERSION="${MEDIAMTX_VERSION:-v1.20.1}"
 : "${MEDIAMTX_COMMIT:?MEDIAMTX_COMMIT is required}"
 SRCDIR="${SRCDIR:-$PWD/src}"
 OUTDIR="${OUTDIR:-$PWD/out}"
+
+# The script changes directory below; resolve relative paths against the
+# launch directory so artifacts land where the caller expects them.
+case "$SRCDIR" in /*) ;; *) SRCDIR="$PWD/$SRCDIR" ;; esac
+case "$OUTDIR" in /*) ;; *) OUTDIR="$PWD/$OUTDIR" ;; esac
+
 SRC="$SRCDIR/mediamtx"
 
 rm -rf "$SRC"

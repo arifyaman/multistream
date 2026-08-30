@@ -27,6 +27,12 @@ SRCDIR="${SRCDIR:-/src}"
 OUTDIR="${OUTDIR:-/out}"
 OUTNAME="${OUTNAME:-ffmpeg}"
 MAX_KB="${MAX_KB:-20000}"
+
+# The script changes directory below; resolve relative paths against the
+# launch directory so artifacts land where the caller expects them.
+case "$SRCDIR" in /*) ;; *) SRCDIR="$PWD/$SRCDIR" ;; esac
+case "$OUTDIR" in /*) ;; *) OUTDIR="$PWD/$OUTDIR" ;; esac
+
 SRC="${SRCDIR}/ffmpeg-${VERSION}"
 
 mkdir -p "$SRCDIR"
@@ -117,9 +123,14 @@ JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 ./configure "${flags[@]}"
 make -j"$JOBS"
 
-# The built binary is always named "ffmpeg"; OUTNAME may add .exe.
+# mingw builds name the binary ffmpeg.exe (EXESUF); everything else builds
+# plain ffmpeg. OUTNAME is the name it gets in the output dir.
+built="ffmpeg"
+if [ -f ffmpeg.exe ]; then
+  built="ffmpeg.exe"
+fi
 mkdir -p "$OUTDIR"
-cp ffmpeg "$OUTDIR/$OUTNAME"
+cp "$built" "$OUTDIR/$OUTNAME"
 chmod +x "$OUTDIR/$OUTNAME"
 
 size_kb=$(( $(stat -c%s "$OUTDIR/$OUTNAME" 2>/dev/null || stat -f%z "$OUTDIR/$OUTNAME") / 1024 ))
