@@ -15,7 +15,11 @@ report_build_failure() {
         echo '```'
       } >> "$GITHUB_STEP_SUMMARY"
     fi
-    printf '::error::%s - last log lines:\n%s\n' "$what" "$(tail -n 15 "$log")"
+    # Workflow-command messages must carry newlines as %0A; a raw newline
+    # ends the message.
+    local tail
+    tail="$(tail -n 15 "$log" | sed -e 's/%/%25/g' -e 's/^/%0A/' | tr -d '\n')"
+    printf '::error::%s - last log lines:%s\n' "$what" "$tail"
   fi
   return 1
 }

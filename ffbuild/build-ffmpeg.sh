@@ -43,6 +43,7 @@ if [ ! -f "ffmpeg-${VERSION}.tar.xz" ]; then
   fi
 fi
 ls -l "ffmpeg-${VERSION}.tar.xz"
+echo "expected sha256: ${SRC_SHA256}"
 
 # Hash without a pipeline (a pipe failure under pipefail would die without
 # saying which tool failed).
