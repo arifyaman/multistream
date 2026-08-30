@@ -91,8 +91,10 @@ case "${TARGET_OS:-}" in
   windows)
     [ -n "${CROSS_PREFIX:-}" ] || { echo "windows build needs CROSS_PREFIX" >&2; exit 1; }
     [ -n "${FFMPEG_ARCH:-}" ] || { echo "windows build needs FFMPEG_ARCH" >&2; exit 1; }
+    # ffmpeg's configure wants the mingw target (mingw64, normalized to
+    # mingw32); "windows" is not a recognized OS value.
     flags+=(
-      --target-os=windows
+      --target-os=mingw64
       --enable-cross-compile
       --cross-prefix="${CROSS_PREFIX}"
       --arch="${FFMPEG_ARCH}"
@@ -100,7 +102,8 @@ case "${TARGET_OS:-}" in
     )
     ;;
   macosx)
-    flags+=(--target-os=macosx)
+    # "macosx" is not a configure OS value either; the branch is "darwin".
+    flags+=(--target-os=darwin)
     ;;
   *)
     echo "unknown TARGET_OS: ${TARGET_OS}" >&2
