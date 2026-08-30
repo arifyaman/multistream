@@ -18,7 +18,15 @@ jobs:
       - name: vet
         run: go vet ./...
       - name: test
-        run: go test -race ./...
+        run: |
+          # On failure, surface the tail as annotations (visible without
+          # signing in to the Actions log).
+          go test -race ./... > test.log 2>&1 || {
+            echo "::error::go test failed; last lines:"
+            tail -n 40 test.log | while IFS= read -r l; do echo "::error::  $l"; done
+            exit 1
+          }
+          tail -n 20 test.log
 
   lint:
     runs-on: ubuntu-latest
