@@ -6,10 +6,16 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
+
+// EnvRuntimeDir is set by the npm CLI shim to the directory holding the
+// bundled runtime binaries (ffmpeg, mediamtx) downloaded at install time.
+const EnvRuntimeDir = "MULTISTREAM_RUNTIME_DIR"
 
 // Platform is one re-broadcast destination.
 type Platform struct {
@@ -41,10 +47,19 @@ type Config struct {
 	// requires mediamtx >= 1.16.3 and alwaysAvailable in its config).
 	// Optional; when set, `check` verifies the file exists.
 	AwayFile string `json:"away_file,omitempty"`
-	// FFmpegPath is the ffmpeg binary the daemon spawns. Default "ffmpeg"
-	// (found on PATH). Set this when ffmpeg is not on PATH (common on
-	// Windows).
+	// FFmpegPath is the ffmpeg binary the daemon spawns. Default: resolved
+	// at runtime as PATH, then the bundled runtime dir (see ResolveBinary).
+	// Set this to pin a specific binary.
 	FFmpegPath string `json:"ffmpeg_path,omitempty"`
+	// ManageMediaMTX makes the daemon spawn and supervise the mediamtx relay
+	// itself instead of expecting an external one. When true, the daemon
+	// generates a mediamtx config from this file, spawns the relay, and
+	// restarts it on exit - so a fresh machine needs no separate mediamtx
+	// install or service. Default false (use an externally managed mediamtx).
+	ManageMediaMTX bool `json:"manage_mediamtx,omitempty"`
+	// MediaMTXPath is the mediamtx binary used when ManageMediaMTX is true.
+	// Default: resolved at runtime as PATH, then the bundled runtime dir.
+	MediaMTXPath string `json:"mediamtx_path,omitempty"`
 	// RestartSec is how long the daemon waits after an ffmpeg exit before
 	// respawning it. Default 5.
 	RestartSec int `json:"restart_sec,omitempty"`
@@ -88,6 +103,35 @@ func (c *Config) KeyFile(p *Platform) string {
 // process table.
 func (c *Config) InputURL() string {
 	return "rtmp://127.0.0.1:" + strconv.Itoa(c.IngestPort) + "/" + c.IngestPath
+}
+
+// ResolveBinary locates a runtime dependency (ffmpeg, mediamtx) the daemon
+// needs to spawn. It tries, in order: an explicit path from the config, the
+// system PATH, and the bundled runtime dir (the binaries the npm postinstall
+// downloaded, exposed via $MULTISTREAM_RUNTIME_DIR). It returns the resolved
+// path and whether a usable binary was found. An explicit path that does not
+// exist is an error, not a fallback, so a typo does not silently switch to a
+// different binary.
+func ResolveBinary(explicit, name string) (string, bool) {
+	if explicit != "" {
+		if st, err := os.Stat(explicit); err == nil && !st.IsDir() {
+			return explicit, true
+		}
+		return "", false
+	}
+	if p, err := exec.LookPath(name); err == nil {
+		return p, true
+	}
+	if dir := os.Getenv(EnvRuntimeDir); dir != "" {
+		candidate := filepath.Join(dir, name)
+		if runtime.GOOS == "windows" {
+			candidate += ".exe"
+		}
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 // DefaultConfigPaths returns the candidate config locations, in priority
@@ -149,9 +193,6 @@ func (c *Config) validate() error {
 	if c.RefreshSec == 0 {
 		c.RefreshSec = 2
 	}
-	if c.FFmpegPath == "" {
-		c.FFmpegPath = "ffmpeg"
-	}
 	if c.RestartSec == 0 {
 		c.RestartSec = 5
 	}
@@ -163,6 +204,17 @@ func (c *Config) validate() error {
 	}
 	if c.AwayFile != "" && !filepath.IsAbs(c.AwayFile) {
 		return fmt.Errorf("away_file must be an absolute path, got %q", c.AwayFile)
+	}
+	if c.ManageMediaMTX {
+		// The managed relay binds the API itself on this machine, so the
+		// API must not point somewhere else (and must not be exposed to
+		// the network).
+		if u, err := url.Parse(c.MediaMTXAPI); err == nil && u.Host != "" {
+			host := u.Hostname()
+			if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+				return fmt.Errorf("manage_mediamtx requires mediamtx_api on a loopback address, got %q", u.Host)
+			}
+		}
 	}
 	if len(c.Platforms) == 0 {
 		return fmt.Errorf("at least one platform is required")

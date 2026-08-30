@@ -35,8 +35,8 @@ func TestLoadConfigValid(t *testing.T) {
 	if cfg.RefreshSec != 2 {
 		t.Errorf("default refresh = %d, want 2", cfg.RefreshSec)
 	}
-	if cfg.FFmpegPath != "ffmpeg" {
-		t.Errorf("default ffmpeg_path = %q, want ffmpeg", cfg.FFmpegPath)
+	if cfg.FFmpegPath != "" {
+		t.Errorf("default ffmpeg_path = %q, want empty (resolved at runtime)", cfg.FFmpegPath)
 	}
 	if cfg.RestartSec != 5 || cfg.StartLimitIntervalSec != 60 || cfg.StartLimitBurst != 5 {
 		t.Errorf("supervisor defaults = %d/%d/%d, want 5/60/5",
@@ -144,5 +144,75 @@ func TestLoadConfigErrors(t *testing.T) {
 func TestLoadConfigMissingFile(t *testing.T) {
 	if _, err := LoadConfig("/nonexistent/config.json"); err == nil {
 		t.Error("want error for missing file")
+	}
+}
+
+func TestResolveBinaryExplicit(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "ffmpeg")
+	if err := os.WriteFile(p, []byte("x"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := ResolveBinary(p, "ffmpeg"); !ok || got != p {
+		t.Errorf("explicit = (%q, %v), want (%q, true)", got, ok, p)
+	}
+	missing := filepath.Join(dir, "nope")
+	if got, ok := ResolveBinary(missing, "ffmpeg"); ok {
+		t.Errorf("missing explicit path = (%q, %v), want not ok", got, ok)
+	}
+}
+
+func TestResolveBinaryPATHAndRuntimeDir(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "mytool")
+	if err := os.WriteFile(bin, []byte("x"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// PATH hit
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if got, ok := ResolveBinary("", "mytool"); !ok || got != bin {
+		t.Errorf("PATH = (%q, %v), want (%q, true)", got, ok, bin)
+	}
+	// No PATH hit -> runtime dir
+	if _, ok := ResolveBinary("", "definitely-missing-tool"); ok {
+		t.Error("missing tool should not resolve from PATH")
+	}
+	rt := filepath.Join(dir, "runtime")
+	if err := os.MkdirAll(rt, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rt, "mytool"), []byte("x"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/nonexistent")
+	t.Setenv(EnvRuntimeDir, rt)
+	if got, ok := ResolveBinary("", "mytool"); !ok || got != filepath.Join(rt, "mytool") {
+		t.Errorf("runtime dir = (%q, %v), want (%q, true)", got, ok, filepath.Join(rt, "mytool"))
+	}
+}
+
+func TestManageMediaMTXRequiresLoopbackAPI(t *testing.T) {
+	content := `{
+  "mediamtx_api": "http://192.168.1.10:9997",
+  "ingest_path": "live/test",
+  "manage_mediamtx": true,
+  "platforms": [{"name": "a", "push_url": "rtmp://h/p"}]
+}`
+	if _, err := LoadConfig(writeConfig(t, content)); err == nil {
+		t.Error("want error for non-loopback mediamtx_api with manage_mediamtx")
+	}
+	content = `{
+  "mediamtx_api": "http://127.0.0.1:9997",
+  "ingest_path": "live/test",
+  "manage_mediamtx": true,
+  "mediamtx_path": "/opt/mediamtx",
+  "platforms": [{"name": "a", "push_url": "rtmp://h/p"}]
+}`
+	cfg, err := LoadConfig(writeConfig(t, content))
+	if err != nil {
+		t.Fatalf("loopback api with manage_mediamtx should be valid: %v", err)
+	}
+	if !cfg.ManageMediaMTX || cfg.MediaMTXPath != "/opt/mediamtx" {
+		t.Errorf("managed fields = (%v, %q)", cfg.ManageMediaMTX, cfg.MediaMTXPath)
 	}
 }

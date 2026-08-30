@@ -46,6 +46,15 @@ func Run(ctx context.Context, cfg *config.Config) int {
 		code = 1
 	}
 
+	if cfg.ManageMediaMTX {
+		if bin, ok := config.ResolveBinary(cfg.MediaMTXPath, "mediamtx"); ok {
+			fmt.Printf("relay:        OK  managed, mediamtx %s\n", bin)
+		} else {
+			code = 1
+			fmt.Println("relay:        FAIL  manage_mediamtx is set but no mediamtx binary was found")
+		}
+	}
+
 	if daemonUp := checkDaemon(); daemonUp {
 		fmt.Println("daemon:       OK  running (supervising the re-broadcasters)")
 	} else {

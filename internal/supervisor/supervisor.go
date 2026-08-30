@@ -30,7 +30,12 @@ import (
 // varRe matches ${NAME} templates in a push URL.
 var varRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// Supervisor owns the supervised ffmpeg processes for a set of platforms.
+// RelayName is the user-facing name of the managed mediamtx relay: it is the
+// argument to `multistream restart` and the key in the state document.
+const RelayName = "relay"
+
+// Supervisor owns the supervised ffmpeg processes for a set of platforms,
+// and - when manage_mediamtx is set - the mediamtx relay itself.
 type Supervisor struct {
 	cfg    *config.Config
 	dir    string
@@ -40,6 +45,9 @@ type Supervisor struct {
 	restartDelay  time.Duration
 	limitInterval time.Duration
 	limitBurst    int
+
+	relayBin string
+	relay    *relay
 
 	platforms map[string]*platform
 	order     []string
@@ -53,12 +61,17 @@ type Supervisor struct {
 
 // New builds a Supervisor from cfg, resolving each platform's push URL from
 // its key file. It fails fast if a push URL needs a key that is not
-// available, since the daemon cannot start that platform without it.
+// available (the daemon cannot start that platform without it) or if a
+// required runtime binary (ffmpeg, mediamtx when managed) cannot be found.
 func New(cfg *config.Config, dir string) (*Supervisor, error) {
+	ffmpeg, ok := config.ResolveBinary(cfg.FFmpegPath, "ffmpeg")
+	if !ok {
+		return nil, fmt.Errorf("no ffmpeg binary found (set ffmpeg_path, put ffmpeg on PATH, or install via the npm package)")
+	}
 	s := &Supervisor{
 		cfg:           cfg,
 		dir:           dir,
-		ffmpeg:        cfg.FFmpegPath,
+		ffmpeg:        ffmpeg,
 		input:         cfg.InputURL(),
 		restartDelay:  time.Duration(cfg.RestartSec) * time.Second,
 		limitInterval: time.Duration(cfg.StartLimitIntervalSec) * time.Second,
@@ -73,6 +86,7 @@ func New(cfg *config.Config, dir string) (*Supervisor, error) {
 			state:  "stopped",
 			log:    newRingLog(64 << 10),
 			action: make(chan struct{}, 1),
+			lim:    newLimiter(),
 		}
 		expanded, secrets, err := expandPushURL(p.PushURL, cfg.KeyFile(p))
 		if err != nil {
@@ -89,6 +103,20 @@ func New(cfg *config.Config, dir string) (*Supervisor, error) {
 		s.platforms[p.Name] = plat
 		s.order = append(s.order, p.Name)
 		s.published.Platforms[p.Name] = state.PlatformState{State: "stopped"}
+	}
+	if cfg.ManageMediaMTX {
+		bin, ok := config.ResolveBinary(cfg.MediaMTXPath, "mediamtx")
+		if !ok {
+			return nil, fmt.Errorf("manage_mediamtx is set but no mediamtx binary was found (set mediamtx_path, put mediamtx on PATH, or install via the npm package)")
+		}
+		s.relayBin = bin
+		s.relay = &relay{
+			mode:   "spawned",
+			state:  "stopped",
+			log:    newRingLog(64 << 10),
+			action: make(chan struct{}, 1),
+			lim:    newLimiter(),
+		}
 	}
 	return s, nil
 }
@@ -119,6 +147,12 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	}
 	s.publish()
 
+	// Start the relay before the re-broadcasters so their first pull has
+	// something to connect to (an ffmpeg that arrives early simply retries).
+	if s.relay != nil {
+		s.startRelay(ctx)
+	}
+
 	for _, name := range s.order {
 		s.wg.Add(1)
 		go func(n string) {
@@ -136,9 +170,23 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	return nil
 }
 
-// Restart asks one platform to (re)start immediately. It resets that
-// platform's start-limit counter and is safe to call from any state.
+// Restart asks one platform (or the managed relay, by its RelayName) to
+// (re)start immediately. It resets the target's start-limit counter and is
+// safe to call from any state.
 func (s *Supervisor) Restart(name string) error {
+	if name == RelayName {
+		if s.relay == nil {
+			return fmt.Errorf("the relay is not managed by this daemon (manage_mediamtx is off)")
+		}
+		if s.relay.mode != "spawned" {
+			return fmt.Errorf("the relay is external (a mediamtx API was already reachable at daemon start); restart it where it runs")
+		}
+		select {
+		case s.relay.action <- struct{}{}:
+		default: // a restart is already pending
+		}
+		return nil
+	}
 	p, ok := s.platforms[name]
 	if !ok {
 		return fmt.Errorf("unknown platform %q", name)
@@ -285,17 +333,7 @@ func (s *Supervisor) removePid(p *platform) {
 // overLimit reports whether p has restarted limitBurst or more times within
 // the limit interval, pruning stale restart timestamps first.
 func (s *Supervisor) overLimit(p *platform) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	cutoff := time.Now().Add(-s.limitInterval)
-	kept := p.restartAt[:0]
-	for _, t := range p.restartAt {
-		if t.After(cutoff) {
-			kept = append(kept, t)
-		}
-	}
-	p.restartAt = kept
-	return len(p.restartAt) >= s.limitBurst
+	return p.lim.over(s.limitInterval, s.limitBurst)
 }
 
 // publishPlatform snapshots p into the published document and writes it.
@@ -341,10 +379,10 @@ type platform struct {
 	state     string
 	restarts  int
 	lastError string
-	restartAt []time.Time
 	since     time.Time
 	action    chan struct{}
 	log       *ringLog
+	lim       *limiter
 }
 
 func (p *platform) setCmd(c *exec.Cmd) {
@@ -380,17 +418,15 @@ func (p *platform) setState(st, lastErr string) {
 func (p *platform) recordRestart(lastErr string) {
 	p.mu.Lock()
 	p.restarts++
-	p.restartAt = append(p.restartAt, time.Now())
 	if lastErr != "" {
 		p.lastError = lastErr
 	}
 	p.mu.Unlock()
+	p.lim.record()
 }
 
 func (p *platform) resetLimit() {
-	p.mu.Lock()
-	p.restartAt = p.restartAt[:0]
-	p.mu.Unlock()
+	p.lim.reset()
 }
 
 func (p *platform) kill() {

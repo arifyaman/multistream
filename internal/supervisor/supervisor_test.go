@@ -3,6 +3,9 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -264,4 +267,170 @@ func TestSupervisorRestartUnknownPlatform(t *testing.T) {
 	if err := sup.Restart("nope"); err == nil {
 		t.Error("want error for unknown platform")
 	}
+}
+
+// --- relay (managed mediamtx) tests ---------------------------------------
+
+// freeTCPPort returns a TCP port that is (probably) free right now.
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+func newTestSupervisorWithRelay(t *testing.T, ffmpeg, mediamtx string, apiPort int, restartDelay, limitInterval time.Duration, burst int) *Supervisor {
+	t.Helper()
+	cfg := &config.Config{
+		MediaMTXAPI:    fmt.Sprintf("http://127.0.0.1:%d", apiPort),
+		IngestPath:     "live/test",
+		IngestPort:     1935,
+		RefreshSec:     2,
+		FFmpegPath:     ffmpeg,
+		MediaMTXPath:   mediamtx,
+		ManageMediaMTX: true,
+		Platforms:      []config.Platform{{Name: "twitch", PushURL: "rtmp://example.com/live/k"}},
+	}
+	sup, err := New(cfg, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup.restartDelay = restartDelay
+	sup.limitInterval = limitInterval
+	sup.limitBurst = burst
+	return sup
+}
+
+func tryRelayState(t *testing.T, sup *Supervisor) (state.RelayState, bool) {
+	t.Helper()
+	st, err := state.LoadSupervisorState(sup.dir)
+	if err != nil || st == nil || st.Relay == nil {
+		return state.RelayState{}, false
+	}
+	return *st.Relay, true
+}
+
+func waitForRelay(t *testing.T, sup *Supervisor, fn func(state.RelayState) bool, timeout time.Duration) state.RelayState {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var rs state.RelayState
+	for time.Now().Before(deadline) {
+		if r, ok := tryRelayState(t, sup); ok && fn(r) {
+			return r
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	rs, _ = tryRelayState(t, sup)
+	t.Fatalf("timed out waiting for relay; last state %+v", rs)
+	return rs
+}
+
+// fakeMediaMTX returns a script that answers --version and otherwise stays
+// up, standing in for the mediamtx binary.
+func fakeMediaMTX(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "fakemtx.sh")
+	body := `if [ "$1" = "--version" ]; then echo v1.20.1; exit 0; fi
+sleep 60
+`
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestSupervisorRelaySpawnAndStop(t *testing.T) {
+	skipIfNotLinux(t)
+	sup := newTestSupervisorWithRelay(t,
+		writeFakeFFmpeg(t, "sleep 60"),
+		fakeMediaMTX(t),
+		freeTCPPort(t),
+		30*time.Millisecond, time.Second, 5)
+	cancel, wait := runSupervisor(t, sup)
+	defer cancel()
+
+	rs := waitForRelay(t, sup, func(r state.RelayState) bool {
+		return r.Mode == "spawned" && r.State == "running" && r.PID > 0
+	}, 3*time.Second)
+	if !procscan.Alive(rs.PID) {
+		t.Errorf("relay pid %d not alive", rs.PID)
+	}
+
+	// The generated config must exist and carry the essentials.
+	data, err := os.ReadFile(state.RelayConfigFile(sup.dir))
+	if err != nil {
+		t.Fatalf("read generated relay config: %v", err)
+	}
+	for _, want := range []string{"api: yes", "rtmp: yes", "moq: no", "live/test:", "source: publisher"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("relay config missing %q:\n%s", want, data)
+		}
+	}
+
+	cancel()
+	wait()
+	if rs, ok := tryRelayState(t, sup); !ok || rs.State != "stopped" {
+		t.Errorf("relay after stop = %+v, want stopped", rs)
+	}
+}
+
+func TestSupervisorRelayExternal(t *testing.T) {
+	skipIfNotLinux(t)
+	// An API already answering at the configured address: the daemon must
+	// track the external relay and not spawn one.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v3/info", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"version":"v1.20.1","started":"2026-01-01T00:00:00Z"}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+
+	sup := newTestSupervisorWithRelay(t,
+		writeFakeFFmpeg(t, "sleep 60"),
+		fakeMediaMTX(t),
+		port,
+		30*time.Millisecond, time.Second, 5)
+	cancel, wait := runSupervisor(t, sup)
+	defer cancel()
+
+	rs := waitForRelay(t, sup, func(r state.RelayState) bool {
+		return r.Mode == "external"
+	}, 3*time.Second)
+	if rs.State != "running" {
+		t.Errorf("external relay state = %q, want running", rs.State)
+	}
+	if rs.PID != 0 {
+		t.Errorf("external relay must not have a pid, got %d", rs.PID)
+	}
+	if _, err := os.Stat(state.RelayConfigFile(sup.dir)); !os.IsNotExist(err) {
+		t.Errorf("no config should be generated for an external relay")
+	}
+
+	cancel()
+	wait()
+}
+
+func TestSupervisorRelayRestartsOnExit(t *testing.T) {
+	skipIfNotLinux(t)
+	sup := newTestSupervisorWithRelay(t,
+		writeFakeFFmpeg(t, "sleep 60"),
+		writeFakeFFmpeg(t, "exit 0"), // mediamtx that dies immediately
+		freeTCPPort(t),
+		30*time.Millisecond, time.Minute, 100)
+	cancel, wait := runSupervisor(t, sup)
+	defer cancel()
+
+	rs := waitForRelay(t, sup, func(r state.RelayState) bool {
+		return r.Restarts >= 3
+	}, 5*time.Second)
+	if rs.Restarts < 3 {
+		t.Fatalf("relay restarts = %d, want >= 3", rs.Restarts)
+	}
+
+	cancel()
+	wait()
 }

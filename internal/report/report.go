@@ -77,12 +77,23 @@ func (p PlatformStatus) Good() bool {
 	return p.Running && p.Connected && p.ConnErr == ""
 }
 
+// RelayStatus is the report's view of the mediamtx relay, present only when
+// the daemon manages it (manage_mediамtx).
+type RelayStatus struct {
+	Mode      string     `json:"mode"` // "spawned" or "external"
+	State     string     `json:"state,omitempty"`
+	Restarts  int        `json:"restarts,omitempty"`
+	LastError string     `json:"last_error,omitempty"`
+	Since     *time.Time `json:"since,omitempty"`
+}
+
 // StatusReport is the full picture the CLI prints.
 type StatusReport struct {
 	Time            time.Time        `json:"time"`
 	DaemonUp        bool             `json:"daemon_up"`
 	Ingest          IngestStatus     `json:"ingest"`
 	Platforms       []PlatformStatus `json:"platforms"`
+	Relay           *RelayStatus     `json:"relay,omitempty"`
 	ExpectedReaders int              `json:"expected_readers"`
 	OK              bool             `json:"ok"`
 }
@@ -121,6 +132,7 @@ func (c *Collector) Collect(ctx context.Context) (*StatusReport, error) {
 	for _, p := range c.cfg.Platforms {
 		rep.Platforms = append(rep.Platforms, c.collectPlatform(p, up))
 	}
+	c.collectRelay(rep, up)
 	// Healthy means the ingest path can be read - live, or the away
 	// segment when off-air - and every platform is pulling.
 	rep.OK = rep.Ingest.APIError == "" && rep.Ingest.Available &&
@@ -234,6 +246,30 @@ func (c *Collector) collectPlatform(p config.Platform, daemonUp bool) PlatformSt
 	return ps
 }
 
+// collectRelay fills the relay view when the daemon manages it. The relay
+// line is informational: a dead relay already shows up as the ingest API
+// error, which drives the OK flag.
+func (c *Collector) collectRelay(rep *StatusReport, daemonUp bool) {
+	if !daemonUp {
+		return
+	}
+	sup := c.supervisor()
+	if sup == nil || sup.Relay == nil {
+		return
+	}
+	rs := sup.Relay
+	rep.Relay = &RelayStatus{
+		Mode:      rs.Mode,
+		State:     rs.State,
+		Restarts:  rs.Restarts,
+		LastError: rs.LastError,
+	}
+	if !rs.Since.IsZero() {
+		ts := rs.Since
+		rep.Relay.Since = &ts
+	}
+}
+
 // supervisor loads the daemon's published state document, or nil when there
 // is none.
 func (c *Collector) supervisor() *state.SupervisorState {
@@ -263,6 +299,13 @@ func (r *StatusReport) Events(prev *StatusReport) []string {
 			out = append(out, fmt.Sprintf("%s ingest AWAY (offline segment, waiting for publisher)", now))
 		default:
 			out = append(out, fmt.Sprintf("%s ingest DROPPED", now))
+		}
+	}
+	if prevRelay, curRelay := prev.Relay, r.Relay; curRelay != nil && (prevRelay == nil || prevRelay.Mode != curRelay.Mode) {
+		if relayState(curRelay) == "UP" {
+			out = append(out, fmt.Sprintf("%s relay UP (%s)", now, curRelay.Mode))
+		} else {
+			out = append(out, fmt.Sprintf("%s relay DOWN (%s)", now, relayDetail(curRelay)))
 		}
 	}
 	oldByName := map[string]PlatformStatus{}
@@ -343,6 +386,10 @@ func (r *StatusReport) Render(color bool) string {
 	}
 	row("ingest", ingSt, ingDetail)
 
+	if r.Relay != nil {
+		row("relay", relayState(r.Relay), relayDetail(r.Relay))
+	}
+
 	for _, p := range r.Platforms {
 		st := "DOWN"
 		if p.Good() {
@@ -384,6 +431,36 @@ func ingestDetail(i IngestStatus, expectedReaders int, sinceLabel string, since 
 		parts = append(parts, sinceLabel+" "+humanDuration(time.Since(*since)))
 	}
 	return strings.Join(parts, "  ")
+}
+
+// relayState maps the relay's supervisor state to the table's state column.
+func relayState(r *RelayStatus) string {
+	switch {
+	case r.Mode == "external":
+		return "UP"
+	case r.State == "running":
+		return "UP"
+	default:
+		return "DOWN"
+	}
+}
+
+// relayDetail assembles the detail column of the relay row.
+func relayDetail(r *RelayStatus) string {
+	if r.Mode == "external" {
+		return "external relay (not spawned by the daemon)"
+	}
+	d := fmt.Sprintf("managed, restarts %d", r.Restarts)
+	if r.State != "" && r.State != "running" {
+		d = r.State + ", " + d
+	}
+	if r.LastError != "" {
+		d += ", " + r.LastError
+	}
+	if r.Since != nil && r.State == "running" {
+		d += ", up " + humanDuration(time.Since(*r.Since))
+	}
+	return d
 }
 
 func platformDetail(p PlatformStatus) string {

@@ -271,3 +271,47 @@ func TestPlatformGood(t *testing.T) {
 		t.Error("not-running platform should not be Good")
 	}
 }
+
+func TestRenderRelay(t *testing.T) {
+	since := time.Now().Add(-time.Hour)
+	r := &StatusReport{Time: time.Now(), DaemonUp: true, ExpectedReaders: 1, OK: true}
+	r.Ingest = IngestStatus{Online: true, Available: true, Readers: 1}
+	r.Platforms = []PlatformStatus{healthyPlatform("twitch")}
+	r.Relay = &RelayStatus{Mode: "spawned", State: "running", Restarts: 0, Since: &since}
+
+	out := r.Render(false)
+	for _, want := range []string{"relay", "UP", "managed, restarts 0"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("relay render missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderRelayExternalAndFailed(t *testing.T) {
+	r := &StatusReport{Time: time.Now(), DaemonUp: true, ExpectedReaders: 1, OK: true}
+	r.Ingest = IngestStatus{Online: true, Available: true, Readers: 1}
+	r.Platforms = []PlatformStatus{healthyPlatform("twitch")}
+	r.Relay = &RelayStatus{Mode: "external", State: "running"}
+	if out := r.Render(false); !strings.Contains(out, "external relay") {
+		t.Errorf("external relay not rendered:\n%s", out)
+	}
+
+	r.Relay = &RelayStatus{Mode: "spawned", State: "failed", Restarts: 5, LastError: "bind: address in use"}
+	out := r.Render(false)
+	if !strings.Contains(out, "relay") || !strings.Contains(out, "failed") || !strings.Contains(out, "address in use") {
+		t.Errorf("failed relay not rendered:\n%s", out)
+	}
+}
+
+func TestEventsRelay(t *testing.T) {
+	prev := &StatusReport{}
+	cur := &StatusReport{Relay: &RelayStatus{Mode: "spawned", State: "running"}}
+	ev := strings.Join(cur.Events(prev), " | ")
+	if !strings.Contains(ev, "relay UP") {
+		t.Errorf("want relay UP event, got %q", ev)
+	}
+	// No change => no relay event.
+	if e := cur.Events(cur); len(e) != 0 {
+		t.Errorf("want no events for identical reports, got %v", e)
+	}
+}

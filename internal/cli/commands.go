@@ -26,8 +26,10 @@ Usage:
   multistream status --watch          live refresh, prints events on change
   multistream status --json           machine-readable (lines in --watch)
   multistream check                   probe API, daemon, endpoints, key files
-  multistream restart <platform>      ask the daemon to restart one re-broadcaster
-  multistream daemon                  run the supervisor (spawn + watch ffmpeg)
+  multistream restart <platform|relay>  ask the daemon to restart a re-broadcaster
+                                        or the managed relay
+  multistream daemon                  run the supervisor (spawn + watch ffmpeg,
+                                        and the relay when manage_mediamtx is set)
   multistream config                  show effective config
 
 Flags:
@@ -155,9 +157,14 @@ func runRestart(cfg *config.Config, args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: multistream restart <platform>")
 		return 2
 	}
-	p, ok := cfg.PlatformByName(args[0])
-	if !ok {
-		fmt.Fprintf(os.Stderr, "multistream: unknown platform %q (see: multistream config)\n", args[0])
+	name := args[0]
+	if name == supervisor.RelayName {
+		if !cfg.ManageMediaMTX {
+			fmt.Fprintln(os.Stderr, "multistream: the relay is not managed by this daemon (manage_mediamtx is off)")
+			return 2
+		}
+	} else if _, ok := cfg.PlatformByName(name); !ok {
+		fmt.Fprintf(os.Stderr, "multistream: unknown platform %q (see: multistream config)\n", name)
 		return 2
 	}
 	dir := stateDirOrEmpty()
@@ -166,13 +173,13 @@ func runRestart(cfg *config.Config, args []string) int {
 		return 1
 	}
 	network, addr := state.IPCNetworkAddr(dir)
-	if err := daemonipc.Restart(network, addr, p.Name); err != nil {
-		fmt.Fprintf(os.Stderr, "multistream: cannot restart %s: %v\n", p.Name, err)
+	if err := daemonipc.Restart(network, addr, name); err != nil {
+		fmt.Fprintf(os.Stderr, "multistream: cannot restart %s: %v\n", name, err)
 		fmt.Fprintln(os.Stderr, "  the daemon is not running - a restart here would be unsupervised.")
 		fmt.Fprintln(os.Stderr, "  start it with: multistream daemon")
 		return 1
 	}
-	fmt.Printf("%s restart requested\n", p.Name)
+	fmt.Printf("%s restart requested\n", name)
 	return 0
 }
 
@@ -190,8 +197,11 @@ func runDaemon(cfg *config.Config) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	fmt.Printf("multistream daemon running (state %s), platforms: %s\n",
-		dir, strings.Join(platformNames(cfg), ", "))
+	what := "platforms: " + strings.Join(platformNames(cfg), ", ")
+	if cfg.ManageMediaMTX {
+		what += "; relay: managed"
+	}
+	fmt.Printf("multistream daemon running (state %s), %s\n", dir, what)
 	if err := sup.Start(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "multistream daemon:", err)
 		return 1
@@ -204,7 +214,16 @@ func runConfig(cfg *config.Config) {
 	fmt.Printf("mediamtx api: %s\n", cfg.MediaMTXAPI)
 	fmt.Printf("ingest:       %s (port %d)\n", cfg.IngestPath, cfg.IngestPort)
 	fmt.Printf("refresh:      %ds\n", cfg.RefreshSec)
-	fmt.Printf("ffmpeg:       %s\n", cfg.FFmpegPath)
+	if cfg.FFmpegPath != "" {
+		fmt.Printf("ffmpeg:       %s (explicit)\n", cfg.FFmpegPath)
+	}
+	if cfg.ManageMediaMTX {
+		detail := "managed by the daemon"
+		if cfg.MediaMTXPath != "" {
+			detail += ", " + cfg.MediaMTXPath + " (explicit)"
+		}
+		fmt.Printf("relay:        %s\n", detail)
+	}
 	fmt.Printf("supervisor:   restart after %ds, limit %d restarts in %ds\n",
 		cfg.RestartSec, cfg.StartLimitBurst, cfg.StartLimitIntervalSec)
 	if cfg.AwayFile != "" {

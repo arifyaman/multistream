@@ -80,6 +80,12 @@ func SupervisorFile(dir string) string {
 	return filepath.Join(dir, "supervisor.json")
 }
 
+// RelayConfigFile returns the path of the mediamtx config the daemon
+// generates for the managed relay.
+func RelayConfigFile(dir string) string {
+	return filepath.Join(dir, "mediamtx.generated.yml")
+}
+
 // IPCNetworkAddr returns the network and address of the daemon IPC endpoint.
 // Unix uses a socket inside the state dir; Windows uses a named pipe.
 func IPCNetworkAddr(dir string) (string, string) {
@@ -98,11 +104,27 @@ type PlatformState struct {
 	Since     time.Time `json:"since,omitempty"`
 }
 
+// RelayState is the supervisor's view of the mediamtx relay, present only
+// when the daemon manages it (manage_mediamtx).
+type RelayState struct {
+	// Managed is true when manage_mediamtx is on (the daemon owns or tracks
+	// the relay); false would mean an unmanaged external relay, which the
+	// daemon does not publish at all, so in practice it is always true.
+	Managed   bool      `json:"managed"`
+	Mode      string    `json:"mode"` // "spawned" (daemon owns the process) or "external" (API already reachable at start)
+	PID       int       `json:"pid"`
+	Restarts  int       `json:"restarts"`
+	State     string    `json:"state"` // "running" | "restarting" | "failed" | "stopped"
+	LastError string    `json:"last_error,omitempty"`
+	Since     time.Time `json:"since,omitempty"`
+}
+
 // SupervisorState is the document the daemon publishes for status/check.
 type SupervisorState struct {
 	Updated   time.Time                `json:"updated"`
 	DaemonPID int                      `json:"daemon_pid"`
 	Platforms map[string]PlatformState `json:"platforms"`
+	Relay     *RelayState              `json:"relay,omitempty"`
 }
 
 // LoadSupervisorState reads the supervisor state document. It returns nil
