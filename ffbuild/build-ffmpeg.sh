@@ -18,6 +18,8 @@
 #   FFMPEG_ARCH     optional, ffmpeg arch name for cross builds
 #   MAX_KB          size guard, default 20000 (20 MB)
 set -euo pipefail
+# Trace the last commands to stderr so a failure log shows where it died.
+set -x
 
 VERSION="${FFMPEG_VERSION:-9.0}"
 : "${SRC_SHA256:?SRC_SHA256 of ffmpeg-${VERSION}.tar.xz is required}"

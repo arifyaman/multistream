@@ -54,9 +54,17 @@ jobs:
       - name: Build linux/amd64 and linux/arm64 (musl, static)
         run: |
           for p in amd64 arm64; do
+            # On failure, surface the tail as annotations (visible without
+            # signing in to the Actions log).
             docker buildx build --platform linux/$p \
               --build-arg SRC_SHA256="${SRC_SHA256}" \
-              -f ffbuild/Dockerfile.linux -t ffbuild:linux_$p --load ffbuild/
+              -f ffbuild/Dockerfile.linux -t ffbuild:linux_$p --load ffbuild/ \
+              > "build-linux_$p.log" 2>&1 || {
+                echo "::error::docker build linux/$p failed; last lines:"
+                tail -n 30 "build-linux_$p.log" | while IFS= read -r l; do echo "::error::  $l"; done
+                exit 1
+              }
+            tail -n 5 "build-linux_$p.log"
             mkdir -p "dist/linux_$p"
             docker run --rm -v "$PWD/dist/linux_$p:/dest" ffbuild:linux_$p \
               sh -c 'mkdir -p /dest && cp /out/ffmpeg /dest/ffmpeg'
@@ -88,10 +96,22 @@ jobs:
           export TARGET_OS=windows SRCDIR="$PWD/src-win"
           mkdir -p "$SRCDIR"
           FFMPEG_ARCH=x86_64 CROSS_PREFIX=x86_64-w64-mingw32- \
-            OUTDIR=dist/windows_amd64 OUTNAME=ffmpeg.exe bash ffbuild/build-ffmpeg.sh
+            OUTDIR=dist/windows_amd64 OUTNAME=ffmpeg.exe \
+            bash ffbuild/build-ffmpeg.sh > build-win-amd64.log 2>&1 || {
+              echo "::error::ffmpeg windows/amd64 build failed; last lines:"
+              tail -n 30 build-win-amd64.log | while IFS= read -r l; do echo "::error::  $l"; done
+              exit 1
+            }
+          tail -n 3 build-win-amd64.log
           if [ -z "${SKIP_ARM64:-}" ]; then
             FFMPEG_ARCH=aarch64 CROSS_PREFIX=aarch64-w64-mingw32- \
-              OUTDIR=dist/windows_arm64 OUTNAME=ffmpeg.exe bash ffbuild/build-ffmpeg.sh
+              OUTDIR=dist/windows_arm64 OUTNAME=ffmpeg.exe \
+              bash ffbuild/build-ffmpeg.sh > build-win-arm64.log 2>&1 || {
+                echo "::error::ffmpeg windows/arm64 build failed; last lines:"
+                tail -n 30 build-win-arm64.log | while IFS= read -r l; do echo "::error::  $l"; done
+                exit 1
+              }
+            tail -n 3 build-win-arm64.log
           fi
           ls -lh dist/windows_*/ffmpeg.exe
       - uses: actions/upload-artifact@v4
@@ -111,7 +131,13 @@ jobs:
           OUTNAME: ffmpeg
           SRCDIR: ${{ github.workspace }}/src-darwin-arm64
           MACOSX_DEPLOYMENT_TARGET: "11.0"
-        run: bash ffbuild/build-ffmpeg.sh
+        run: |
+          bash ffbuild/build-ffmpeg.sh > build-darwin-arm64.log 2>&1 || {
+            echo "::error::ffmpeg darwin/arm64 build failed; last lines:"
+            tail -n 30 build-darwin-arm64.log | while IFS= read -r l; do echo "::error::  $l"; done
+            exit 1
+          }
+          tail -n 3 build-darwin-arm64.log
       - name: Build darwin/amd64 (cross on the arm64 runner)
         env:
           TARGET_OS: macosx
@@ -120,7 +146,13 @@ jobs:
           SRCDIR: ${{ github.workspace }}/src-darwin-amd64
           CC: "clang -arch x86_64"
           MACOSX_DEPLOYMENT_TARGET: "10.15"
-        run: bash ffbuild/build-ffmpeg.sh
+        run: |
+          bash ffbuild/build-ffmpeg.sh > build-darwin-amd64.log 2>&1 || {
+            echo "::error::ffmpeg darwin/amd64 build failed; last lines:"
+            tail -n 30 build-darwin-amd64.log | while IFS= read -r l; do echo "::error::  $l"; done
+            exit 1
+          }
+          tail -n 3 build-darwin-amd64.log
       - name: Show results
         run: |
           ls -lh dist/darwin_*/ffmpeg

@@ -14,4 +14,5 @@ ENV SRC_SHA256=${SRC_SHA256} \
     OUTDIR=/out \
     SRCDIR=/src
 
-RUN /opt/build-ffmpeg.sh
+# bash: do not rely on the exec bit, which git may not carry.
+RUN bash /opt/build-ffmpeg.sh
