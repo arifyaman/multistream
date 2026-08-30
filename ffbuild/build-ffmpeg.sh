@@ -27,13 +27,29 @@ OUTNAME="${OUTNAME:-ffmpeg}"
 MAX_KB="${MAX_KB:-20000}"
 SRC="${SRCDIR}/ffmpeg-${VERSION}"
 
+# sha256_of works on Linux (sha256sum, coreutils or busybox) and macOS (shasum).
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
 mkdir -p "$SRCDIR"
 cd "$SRCDIR"
 if [ ! -f "ffmpeg-${VERSION}.tar.xz" ]; then
-  curl -fsSL -o "ffmpeg-${VERSION}.tar.xz" \
-    "https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz"
+  # curl is absent on alpine (busybox provides wget); wget is absent on the
+  # macOS runner - use whichever exists.
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "ffmpeg-${VERSION}.tar.xz" \
+      "https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz"
+  else
+    wget -q -O "ffmpeg-${VERSION}.tar.xz" \
+      "https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz"
+  fi
 fi
-actual="$(sha256sum "ffmpeg-${VERSION}.tar.xz" | awk '{print $1}')"
+actual="$(sha256_of "ffmpeg-${VERSION}.tar.xz")"
 if [ "$actual" != "$SRC_SHA256" ]; then
   echo "ffmpeg source sha256 mismatch: got ${actual}, want ${SRC_SHA256}" >&2
   exit 1
@@ -87,8 +103,11 @@ case "${TARGET_OS:-}" in
     ;;
 esac
 
+# Parallelism: nproc (Linux), sysctl hw.ncpu (macOS), else a sane default.
+JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
+
 ./configure "${flags[@]}"
-make -j"$(nproc)"
+make -j"$JOBS"
 
 # The built binary is always named "ffmpeg"; OUTNAME may add .exe.
 mkdir -p "$OUTDIR"
