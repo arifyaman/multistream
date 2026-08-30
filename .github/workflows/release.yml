@@ -168,7 +168,17 @@ jobs:
           if [[ "${prerelease}" == 1 ]]; then
             cur="$(NODE_AUTH_TOKEN= npm view @arifyaman/multistream@latest version 2>/dev/null || true)"
             if [[ -z "${cur}" || "${cur}" == *-* ]]; then
-              npm dist-tag add "@arifyaman/multistream@${version}" latest
+              # npm registry operations can fail transiently. The publish
+              # above is already done, so retry once; the step is idempotent,
+              # a job re-run skips the publish and only re-does this move.
+              if ! npm dist-tag add "@arifyaman/multistream@${version}" latest; then
+                echo "npm dist-tag add failed; retrying in 5s ..."
+                sleep 5
+                if ! npm dist-tag add "@arifyaman/multistream@${version}" latest; then
+                  echo "::error::v${version} is published on npm, but the 'latest' dist-tag still points to '${cur:-<none>}' (the dist-tag move failed). Re-run the npm job to finish it."
+                  exit 1
+                fi
+              fi
               echo "moved 'latest' from '${cur:-<none>}' to ${version}"
             else
               echo "keeping 'latest' at stable ${cur}"
