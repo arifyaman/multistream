@@ -252,6 +252,10 @@ func (s *Supervisor) writeRelayConfig(version string) error {
 		b.WriteString("    alwaysAvailable: true\n")
 		fmt.Fprintf(&b, "    alwaysAvailableFile: %s\n", s.cfg.AwayFile)
 	}
+	// Stock mediamtx allows publishing to any path via the "all" catch-all;
+	// without it, newer mediamtx rejects publishes to unconfigured paths.
+	b.WriteString("  all:\n")
+	b.WriteString("    source: publisher\n")
 	path := state.RelayConfigFile(s.dir)
 	if err := state.WriteFile(path, []byte(b.String())); err != nil {
 		return fmt.Errorf("write relay config: %w", err)
