@@ -91,8 +91,10 @@ flags=(
 
 case "${TARGET_OS:-}" in
   "")
-    # native linux (musl in Docker): static by nature
-    flags+=(--extra-libs="-lpthread -lm")
+    # native linux (musl in Docker). musl links dynamically by default,
+    # which produces a binary that cannot run on glibc hosts - force a
+    # fully static link instead.
+    flags+=(--extra-libs="-static -lpthread -lm")
     ;;
   windows)
     [ -n "${CROSS_PREFIX:-}" ] || { echo "windows build needs CROSS_PREFIX" >&2; exit 1; }
