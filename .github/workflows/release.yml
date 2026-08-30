@@ -46,8 +46,10 @@ jobs:
               -X github.com/xlip/multistream/internal/version.Date=${date}" \
             -o "$work/multistream${ext}" ./cmd/multistream
           cp LICENSE README.md "$work/"
-          mkdir -p dist
-          tar -czf "dist/${asset}.tar.gz" "$work"
+           mkdir -p dist
+           # -C build: the tarball's top-level dir must be the asset name,
+           # not the build/ working prefix.
+           tar -czf "dist/${asset}.tar.gz" -C build "${asset}"
           mv "$work/multistream${ext}" "dist/${asset}${ext}"
           hash="$(sha256sum "dist/${asset}${ext}" | awk '{print $1}')"
           printf '%s  %s\n' "$hash" "${asset}${ext}" > "sha256sums/SHA256SUMS-${GOOS}_${GOARCH}.txt"
@@ -70,6 +72,11 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: build
+    env:
+      # The runtime bundle (ffmpeg + mediamtx) packed inside the
+      # per-platform tarballs, so a manual install is a single file.
+      # Bump when the ffbuild workflow publishes a new runtime-v* release.
+      RUNTIME_TAG: runtime-v1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -77,6 +84,40 @@ jobs:
           pattern: dist-*
           merge-multiple: true
           path: dist
+      - name: Fetch runtime bundles
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$RUNTIME_TAG" \
+            --pattern 'multistream-runtime_*.tar.gz' \
+            --dir runtime
+      - name: Build full-bundle tarballs
+        # Each per-platform tarball becomes the complete, zero-dependency
+        # install: app binary + bundled ffmpeg + mediamtx in one flat dir,
+        # so putting the extracted folder on PATH is all a user has to do.
+        # Platforms without a runtime (currently windows_arm64) keep the
+        # app-only tarball.
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for rt in runtime/multistream-runtime_*.tar.gz; do
+            t="$(basename "$rt" | sed -e 's/^multistream-runtime_//' -e 's/\.tar\.gz$//')"
+            os="${t%_*}"; arch="${t#*_}"
+            app="multistream_${version}_${os}_${arch}"
+            rm -rf "work/$app" "work/$app-rt" && mkdir -p "work/$app" "work/$app-rt"
+            tar -xzf "dist/${app}.tar.gz" -C "work/$app" --strip-components=1
+            tar -xzf "$rt" -C "work/$app-rt" --strip-components=1
+            mv "work/$app-rt/bin/"* "work/$app/"
+            rmdir "work/$app-rt/bin"
+            mv "work/$app-rt/"* "work/$app/"
+            rm -rf "work/$app-rt"
+            tar -czf "dist/${app}.tar.gz" -C work "$app"
+          done
+      - name: Write SHA256SUMS
+        run: |
+          set -euo pipefail
+          sha256sum dist/multistream_* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
       - name: Clear stale releases for this tag
         # Draft releases from aborted runs survive tag deletion and make
         # action-gh-release fail with "already_exists"; remove them first.
@@ -91,7 +132,9 @@ jobs:
           done
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/multistream_*
+          files: |
+            dist/multistream_*
+            SHA256SUMS.txt
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
         env:

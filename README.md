@@ -82,13 +82,13 @@ Every line is measured, not guessed:
 
 ## Requirements
 
-- `ffmpeg` for the re-broadcasting - or nothing: the **npm install bundles a
-  minimal remux-only ffmpeg** (plus mediamtx, when the daemon manages the
-  relay), downloaded and checksum-verified at install time.
+- `ffmpeg` for the re-broadcasting - or nothing: the **npm install and the
+  release tarballs bundle a minimal remux-only ffmpeg** (plus mediamtx),
+  checksum-verified at install time.
 - `mediamtx` (the relay) - or nothing again: with `manage_mediamtx: true`
-  the daemon runs and supervises the relay itself (the npm package ships a
-  mediamtx binary for this). Without that, install mediamtx separately - see
-  [step 1](#1-install-the-relay-mediamtx) - or use
+  the daemon runs and supervises the relay itself (the npm package and the
+  release tarballs ship a mediamtx binary for this). Without that, install
+  mediamtx separately - see [step 1](#1-install-the-relay-mediamtx) - or use
   [the relay on a VPS](#putting-the-relay-on-a-vps-optional).
 - The `multistream` daemon runs on **Linux, macOS and Windows** with no
   systemd dependency - it spawns and supervises the ffmpeg processes itself.
@@ -153,9 +153,10 @@ Keeping the daemon alive:
   `launchctl load ~/Library/LaunchAgents/com.arifyaman.multistream.plist`
 - **Windows:** a Task Scheduler task that runs `multistream.exe daemon` at
   logon (with the "restart if it fails" option), or simply a terminal you
-  keep open. If you installed the bare binary (not via npm), set
-  `ffmpeg_path` in your config - ffmpeg is usually not on PATH on Windows.
-  npm installs bundle ffmpeg, so nothing to set.
+  keep open. If you installed the bare multistream binary alone (not the npm
+  package or the full tarball), set `ffmpeg_path` in your config - ffmpeg
+  is usually not on PATH on Windows. npm installs and the full tarball
+  bundle ffmpeg, so nothing to set.
 
 ## Install
 
@@ -166,13 +167,24 @@ time):
 npm install -g @arifyaman/multistream
 ```
 
-**Binary:** download the asset for your platform from the
-[latest release](https://github.com/arifyaman/multiStream/releases/latest)
-(named `multistream_<version>_<os>_<arch>`, or the matching `.tar.gz`), then:
+**Binary tarball** (one file with everything: the multistream binary plus
+the bundled ffmpeg and mediamtx - no other installs needed): download
+`multistream_<version>_<os>_<arch>.tar.gz` from the
+[latest release](https://github.com/arifyaman/multiStream/releases/latest),
+verify it against `SHA256SUMS.txt`, extract it, and put the folder on your
+PATH:
 
 ```
-install -m755 multistream_* /usr/local/bin/multistream
+tar -xzf multistream_*.tar.gz
+sudo install -d /opt/multistream
+sudo cp -r multistream_*/* /opt/multistream/
+sudo ln -s /opt/multistream/multistream /usr/local/bin/
 ```
+
+(On Windows: extract the tarball and add the folder to your PATH. The
+`ffmpeg`/`mediamtx` binaries sit next to `multistream` in the same folder,
+and the daemon finds them there. Windows ARM64 has no bundled runtime -
+install ffmpeg and mediamtx separately there.)
 
 Or build from source (Go >= 1.22, no external deps): `make build`.
 
