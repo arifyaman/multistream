@@ -22,8 +22,22 @@ the key files (see [Keys](README.md#keys) in the README).
   config), e.g. `live/<long-random-name>`.
 - `ingest_port` - the RTMP port the relay listens on. Default `1935`.
 - `refresh_sec` - default `--watch` refresh interval in seconds. Default `2`.
-- `ffmpeg_path` - the ffmpeg binary the daemon spawns. Default `ffmpeg`
-  (looked up on PATH). Set it when ffmpeg is not on PATH (common on Windows).
+- `ffmpeg_path` - the ffmpeg binary the daemon spawns. When unset, the
+  daemon resolves it at start: PATH first, then the bundled runtime dir (the
+  ffmpeg the npm package installed, exposed via `$MULTISTREAM_RUNTIME_DIR`).
+  Set it to pin a specific binary; a set-but-missing path is an error rather
+  than a silent fallback.
+- `manage_mediamtx` - when `true`, the daemon spawns and supervises the
+  mediamtx relay itself instead of expecting an externally managed one: it
+  generates a minimal mediamtx config (RTMP + loopback API only, plus
+  `alwaysAvailable` when `away_file` is set) in the state dir, starts it
+  before the re-broadcasters, and restarts it on exit with the same rate
+  limit as the platforms. If a mediamtx API is already reachable at
+  `mediamtx_api` when the daemon starts, that external relay is tracked
+  instead of spawning a second one. `mediamtx_api` must be a loopback
+  address. Default `false`.
+- `mediamtx_path` - the mediamtx binary used when `manage_mediamtx` is
+  true. Resolved like `ffmpeg_path` (PATH, then the bundled runtime dir).
 - `restart_sec` - how long the daemon waits after an ffmpeg exit before
   respawning it. Default `5`.
 - `start_limit_interval_sec` / `start_limit_burst` - if a platform restarts
@@ -48,5 +62,10 @@ the key files (see [Keys](README.md#keys) in the README).
 
 - The daemon's state (pid files, supervisor state, IPC endpoint) lives in the
   per-user state dir; override its location with `$MULTISTREAM_STATE`.
+- `$MULTISTREAM_RUNTIME_DIR` is set by the npm CLI shim to the bundled
+  runtime dir (ffmpeg, mediamtx); it is the last place binary resolution
+  looks. When the daemon manages the relay (`manage_mediamtx`), the
+  generated mediamtx config lives in the state dir as
+  `mediamtx.generated.yml`.
 - `multistream config` prints the effective configuration without ever
   reading or printing key values.

@@ -82,8 +82,14 @@ Every line is measured, not guessed:
 
 ## Requirements
 
-- `mediamtx` (the relay) and `ffmpeg` on the machine that does the
-  re-broadcasting.
+- `ffmpeg` for the re-broadcasting - or nothing: the **npm install bundles a
+  minimal remux-only ffmpeg** (plus mediamtx, when the daemon manages the
+  relay), downloaded and checksum-verified at install time.
+- `mediamtx` (the relay) - or nothing again: with `manage_mediamtx: true`
+  the daemon runs and supervises the relay itself (the npm package ships a
+  mediamtx binary for this). Without that, install mediamtx separately - see
+  [step 1](#1-install-the-relay-mediamtx) - or use
+  [the relay on a VPS](#putting-the-relay-on-a-vps-optional).
 - The `multistream` daemon runs on **Linux, macOS and Windows** with no
   systemd dependency - it spawns and supervises the ffmpeg processes itself.
   See [OS notes](#os-notes) for the per-OS differences.
@@ -147,8 +153,9 @@ Keeping the daemon alive:
   `launchctl load ~/Library/LaunchAgents/com.arifyaman.multistream.plist`
 - **Windows:** a Task Scheduler task that runs `multistream.exe daemon` at
   logon (with the "restart if it fails" option), or simply a terminal you
-  keep open. Also set `ffmpeg_path` in your config - ffmpeg is usually not on
-  PATH on Windows.
+  keep open. If you installed the bare binary (not via npm), set
+  `ffmpeg_path` in your config - ffmpeg is usually not on PATH on Windows.
+  npm installs bundle ffmpeg, so nothing to set.
 
 ## Install
 
@@ -180,7 +187,15 @@ system service.
 
 ### 1. Install the relay (mediamtx)
 
-Grab the latest [mediamtx release](https://github.com/bluenviron/mediamtx/releases)
+**Shortcut - let the daemon run the relay.** If you installed via npm (or
+have a `mediamtx` binary the daemon can find), skip this whole step: set
+`"manage_mediamtx": true` in your config and the daemon starts mediamtx
+itself from a generated config (RTMP + loopback API, only the path you need),
+supervises it like the other processes, and picks up `away_file`
+automatically. Then go to [step 2](#2-configure-multistream).
+
+Otherwise, install mediamtx by hand: grab the latest
+[mediamtx release](https://github.com/bluenviron/mediamtx/releases)
 for your platform (a `mediamtx_<version>_<os>_<arch>.tar.gz` tarball) and
 install the binary from it:
 
@@ -337,7 +352,7 @@ it even if the table is not on screen.
 ```
 multistream [status] [--watch] [--interval N] [--json] [--no-color]
 multistream check
-multistream restart <platform>
+multistream restart <platform|relay>
 multistream daemon
 multistream config
 ```
@@ -346,8 +361,8 @@ multistream config
 |---|---|
 | `status` | one-shot table (default command). `--watch` keeps refreshing and prints an event line when anything changes (ingest dropped, away file playing, platform down/up). `--json` for machines. Works with or without the daemon running. |
 | `check` | probe the setup without streaming: mediamtx API reachable + version, the daemon is running, each push endpoint is TCP-reachable, each key file exists, away file present. Run this after setup. |
-| `restart <platform>` | ask the daemon to restart one re-broadcaster (resets its restart limit). Refuses if the daemon is not running, since a restart without a supervisor would be unsupervised. |
-| `daemon` | run the supervisor in the foreground: spawn one ffmpeg per platform and keep them alive. Keep it running with a service manager (see step 3). |
+| `restart <platform\|relay>` | ask the daemon to restart one re-broadcaster, or the managed relay when `manage_mediamtx` is set (resets the target's restart limit). Refuses if the daemon is not running, since a restart without a supervisor would be unsupervised. |
+| `daemon` | run the supervisor in the foreground: spawn one ffmpeg per platform and keep them alive, plus the mediamtx relay when `manage_mediamtx` is set. Keep it running with a service manager (see step 3). |
 | `config` | print the effective configuration (key values are never read or printed). |
 
 Global flags: `-config <file>`, `-version`, `-h`.
@@ -454,7 +469,11 @@ settings exactly.
 
 ### 2. Enable it in mediamtx
 
-In `/etc/multistream/mediamtx.yml`, extend the ingest path:
+If the daemon manages the relay (`manage_mediamtx`), there is nothing to do -
+the generated config already carries `alwaysAvailable` + your away file
+whenever `away_file` is set; just (re)start the daemon.
+
+Otherwise, in `/etc/multistream/mediamtx.yml`, extend the ingest path:
 
 ```yaml
 paths:

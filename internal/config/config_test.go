@@ -216,3 +216,36 @@ func TestManageMediaMTXRequiresLoopbackAPI(t *testing.T) {
 		t.Errorf("managed fields = (%v, %q)", cfg.ManageMediaMTX, cfg.MediaMTXPath)
 	}
 }
+
+func TestResolveBinaryBareName(t *testing.T) {
+	// A bare command name is looked up on PATH, keeping configs that carry
+	// the old default ("ffmpeg") working.
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "myffmpeg")
+	if err := os.WriteFile(bin, []byte("x"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(EnvRuntimeDir, "")
+	if got, ok := ResolveBinary("myffmpeg", "ffmpeg"); !ok || got != bin {
+		t.Errorf("bare name = (%q, %v), want (%q, true)", got, ok, bin)
+	}
+	// A bare name missing everywhere is an error (no fallback to the default
+	// name).
+	if _, ok := ResolveBinary("definitely-not-a-binary", "ffmpeg"); ok {
+		t.Error("missing bare name should not resolve")
+	}
+	// A bare name falls back to the runtime dir.
+	rt := filepath.Join(dir, "runtime")
+	if err := os.MkdirAll(rt, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rt, "myffmpeg"), []byte("x"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/nonexistent")
+	t.Setenv(EnvRuntimeDir, rt)
+	if got, ok := ResolveBinary("myffmpeg", "ffmpeg"); !ok || got != filepath.Join(rt, "myffmpeg") {
+		t.Errorf("bare name in runtime dir = (%q, %v)", got, ok)
+	}
+}

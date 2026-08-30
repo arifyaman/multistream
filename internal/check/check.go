@@ -37,6 +37,10 @@ func Run(ctx context.Context, cfg *config.Config) int {
 	if v, err := client.Version(ctx); err == nil {
 		mtxVersion, haveVersion = v, true
 		fmt.Printf("mediamtx:     OK  version %s  api %s\n", v, cfg.MediaMTXAPI)
+	} else if cfg.ManageMediaMTX {
+		// The daemon owns the relay and will bring this API up on start, so
+		// an unreachable API is not a fault yet.
+		fmt.Printf("mediamtx:     SKIP  api %s  not up yet (the daemon manages the relay)\n", cfg.MediaMTXAPI)
 	} else {
 		code = 1
 		fmt.Printf("mediamtx:     FAIL  api %s  %v\n", cfg.MediaMTXAPI, err)

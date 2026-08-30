@@ -5,7 +5,6 @@
   "refresh_sec": 2,
   "away_file": "/etc/multistream/away.mp4",
   "keys_dir": "/etc/multistream/keys",
-  "ffmpeg_path": "ffmpeg",
   "restart_sec": 5,
   "start_limit_interval_sec": 60,
   "start_limit_burst": 5,

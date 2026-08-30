@@ -111,19 +111,25 @@ func (c *Config) InputURL() string {
 // downloaded, exposed via $MULTISTREAM_RUNTIME_DIR). It returns the resolved
 // path and whether a usable binary was found. An explicit path that does not
 // exist is an error, not a fallback, so a typo does not silently switch to a
-// different binary.
+// different binary. A bare command name (no path separator), such as the
+// long-used "ffmpeg", is looked up on PATH and in the runtime dir like any
+// name, keeping old configs working.
 func ResolveBinary(explicit, name string) (string, bool) {
-	if explicit != "" {
+	if explicit != "" && !isBareName(explicit) {
 		if st, err := os.Stat(explicit); err == nil && !st.IsDir() {
 			return explicit, true
 		}
 		return "", false
 	}
-	if p, err := exec.LookPath(name); err == nil {
+	probe := name
+	if explicit != "" {
+		probe = explicit
+	}
+	if p, err := exec.LookPath(probe); err == nil {
 		return p, true
 	}
 	if dir := os.Getenv(EnvRuntimeDir); dir != "" {
-		candidate := filepath.Join(dir, name)
+		candidate := filepath.Join(dir, probe)
 		if runtime.GOOS == "windows" {
 			candidate += ".exe"
 		}
@@ -132,6 +138,12 @@ func ResolveBinary(explicit, name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// isBareName reports whether s is a plain command name rather than a path
+// (it contains neither path separator).
+func isBareName(s string) bool {
+	return !strings.Contains(s, "/") && !strings.Contains(s, string(os.PathSeparator))
 }
 
 // DefaultConfigPaths returns the candidate config locations, in priority
