@@ -282,17 +282,31 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          source ffbuild/fail-annotate.sh
           tag="${RUNTIME_TAG}"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --prerelease \
-              --title "Runtime bundle: ffmpeg + mediamtx" \
-              --notes "Downloaded by the @arifyaman/multistream npm postinstall. Not for direct use."
-          else
-            # A tag push auto-creates a plain release; mark it prerelease so
-            # it does not become the "Latest release" banner.
-            gh release edit "$tag" --prerelease
-          fi
-          gh release upload "$tag" multistream-runtime_*.tar.gz SHA256SUMS-runtime.txt --clobber
+          {
+            # A tag push auto-creates the release, but possibly as a DRAFT,
+            # and 'gh release view' ignores drafts by default - so do not
+            # branch on view; edit handles both states.
+            if gh release view "$tag" >/dev/null 2>&1 \
+              || gh release view "$tag" --draft >/dev/null 2>&1; then
+              # Mark prerelease so it never becomes the "Latest release"
+              # banner, and publish it in case the tag push left a draft.
+              gh release edit "$tag" --prerelease
+              gh release edit "$tag" --draft=false
+            else
+              gh release create "$tag" --prerelease \
+                --title "Runtime bundle: ffmpeg + mediamtx" \
+                --notes "Downloaded by the @arifyaman/multistream npm postinstall. Not for direct use."
+            fi
+            ls -lh multistream-runtime_*.tar.gz SHA256SUMS-runtime.txt
+            gh release upload "$tag" multistream-runtime_*.tar.gz \
+              SHA256SUMS-runtime.txt --clobber
+          } > upload.log 2>&1 || {
+            report_build_failure "runtime release upload failed" upload.log
+            exit 1
+          }
+          cat upload.log
       - uses: actions/upload-artifact@v4
         with:
           name: runtime
