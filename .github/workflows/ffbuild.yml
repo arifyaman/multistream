@@ -41,6 +41,7 @@ env:
   SRC_SHA256: ${{ inputs.src_sha256 || '7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52' }}
   MEDIAMTX_VERSION: ${{ inputs.mediamtx_version || 'v1.20.1' }}
   MEDIAMTX_COMMIT: ${{ inputs.mediamtx_commit || '883194a19b7244355c9bc975c0574c9842733637' }}
+  RUNTIME_TAG: ${{ inputs.runtime_tag || 'runtime-v1' }}
 
 jobs:
   ffmpeg-linux:
@@ -272,7 +273,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${{ inputs.runtime_tag }}"
+          tag="${RUNTIME_TAG}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --prerelease \
               --title "Runtime bundle: ffmpeg + mediamtx" \
