@@ -204,10 +204,15 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Smoke test (away -> live remux, exactly the daemon's shape)
         run: |
+          source ffbuild/fail-annotate.sh
           chmod +x ffbuild/smoke-test.sh
           ffbuild/smoke-test.sh dist/linux_amd64/ffmpeg \
             dist/mediamtx-linux-amd64 \
-            test/data/sample.flv test/data/away.mp4
+            test/data/sample.flv test/data/away.mp4 > smoke.log 2>&1 || {
+            report_build_failure "smoke test failed" smoke.log
+            exit 1
+          }
+          cat smoke.log
 
   bundle:
     runs-on: ubuntu-latest

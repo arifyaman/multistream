@@ -17,7 +17,10 @@ MEDIAMTX="$(abs "$MEDIAMTX")"
 SAMPLE="$(abs "$SAMPLE")"
 AWAY="$(abs "$AWAY")"
 WORK="$(mktemp -d)"
-trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$WORK"' EXIT
+# The || true matters: on the success path all jobs are already reaped, so
+# kill gets no arguments and errors; under set -e that would override the
+# exit code and fail a passing test.
+trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$WORK"' EXIT
 cd "$WORK" # mediamtx may generate cert files in the CWD
 
 cat > "$WORK/mediamtx.yml" <<EOF
