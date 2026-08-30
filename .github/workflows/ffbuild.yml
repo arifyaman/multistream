@@ -202,6 +202,11 @@ jobs:
         with:
           name: mediamtx
           path: dist
+      # The artifact round-trip drops the executable bit; restore it before
+      # anything runs the downloaded binaries.
+      - name: Restore executable bits
+        run: |
+          chmod +x dist/linux_amd64/ffmpeg dist/mediamtx-linux-amd64
       - name: Install ffprobe (verification only, not shipped)
         run: |
           sudo apt-get update
@@ -239,6 +244,10 @@ jobs:
       - name: Assemble per-platform runtime bundles
         run: |
           set -euo pipefail
+          # Artifact round-trips drop the executable bit; restore it so the
+          # shipped tarballs carry executable binaries.
+          chmod +x dist/linux_*/ffmpeg dist/darwin_*/ffmpeg \
+            dist/windows_*/ffmpeg.exe dist/mediamtx-*
           missing=""
           for t in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64 windows_arm64; do
             os="${t%_*}"; arch="${t#*_}"

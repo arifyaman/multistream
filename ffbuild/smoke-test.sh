@@ -22,6 +22,14 @@ for f in "$FFMPEG" "$MEDIAMTX" "$SAMPLE" "$AWAY"; do
     exit 1
   fi
 done
+# The artifact round-trip can drop the executable bit; fail loud rather than
+# die deep in the test with "Permission denied".
+for f in "$FFMPEG" "$MEDIAMTX"; do
+  if [ ! -x "$f" ]; then
+    echo "FAIL: not executable: $f"
+    exit 1
+  fi
+done
 WORK="$(mktemp -d)"
 # The || true matters: on the success path all jobs are already reaped, so
 # kill gets no arguments and errors; under set -e that would override the
