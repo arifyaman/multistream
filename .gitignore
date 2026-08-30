@@ -5,3 +5,6 @@
 /dist
 /deploy-notes.local.md
 /assets
+# mediamtx auto-generated certs (created in CWD when running it locally)
+auto.key
+auto.crt

@@ -1,0 +1,16 @@
+# Minimal ffmpeg for one linux target. Alpine = musl, so the result is a
+# fully static binary. Built per-arch with buildx (linux/amd64, linux/arm64);
+# arm64 runs under qemu on amd64 runners, which is slow but fine for an
+# infrequently run workflow.
+FROM alpine:3.21
+
+RUN apk add --no-cache build-base file
+
+COPY build-ffmpeg.sh /opt/build-ffmpeg.sh
+
+ARG SRC_SHA256
+ENV SRC_SHA256=${SRC_SHA256} \
+    OUTDIR=/out \
+    SRCDIR=/src
+
+RUN /opt/build-ffmpeg.sh

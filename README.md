@@ -193,7 +193,7 @@ Create `/etc/multistream/mediamtx.yml`:
 
 ```yaml
 api: yes
-apiAddr: 127.0.0.1:9997
+apiAddress: 127.0.0.1:9997
 paths:
   live/MY_LONG_RANDOM_NAME:
     source: publisher
@@ -203,7 +203,7 @@ paths:
   your only "password": nobody who does not know it can push to your stream.
 - mediamtx v1 requires every path to be **pre-configured** like this, or the
   publish is rejected.
-- `apiAddr` stays on 127.0.0.1 - it is only used by `multistream` on the
+- `apiAddress` stays on 127.0.0.1 - it is only used by `multistream` on the
   same machine.
 
 Run it under systemd (`/etc/systemd/system/mediamtx.service`):
