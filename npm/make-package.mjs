@@ -1,16 +1,17 @@
 // Build the npm package.json for a release from the SHA256SUMS file.
-// Usage: node make-package.mjs <version> <path-to-SHA256SUMS> [releases-base-url] [owner/repo]
+// Usage: node make-package.mjs <version> <path-to-SHA256SUMS> [releases-base-url] [owner/repo] [runtime-tag] [runtime-sums-path]
 // The resulting package.json is written to stdout.
 
 import { readFileSync } from 'node:fs';
 
-const [version, sumsPath, releasesBase, repo] = process.argv.slice(2);
+const [version, sumsPath, releasesBase, repo, runtimeTag, runtimeSumsPath] = process.argv.slice(2);
 if (!version || !sumsPath) {
-  console.error('usage: make-package.mjs <version> <SHA256SUMS> [releases-base-url] [owner/repo]');
+  console.error('usage: make-package.mjs <version> <SHA256SUMS> [releases-base-url] [owner/repo] [runtime-tag] [runtime-sums-path]');
   process.exit(2);
 }
 
-const base = `${(releasesBase || 'https://github.com/arifyaman/multiStream/releases').replace(/\/$/, '')}/download/v${version}`;
+const releasesRoot = (releasesBase || 'https://github.com/arifyaman/multiStream/releases').replace(/\/$/, '');
+const base = `${releasesRoot}/download/v${version}`;
 const repository = repo ? `github:${repo}` : 'github:arifyaman/multiStream';
 
 // "<os>_<arch>" (asset suffix) -> npm platform key
@@ -33,6 +34,26 @@ for (const line of readFileSync(sumsPath, 'utf8').trim().split('\n')) {
   }
 }
 
+// The bundled runtime (ffmpeg + mediamtx) is downloaded by postinstall from
+// the dedicated "runtime-v*" GitHub release, not from this release. Only
+// platforms the build farm actually produced are listed, so unsupported
+// platforms fall back to system-wide ffmpeg/mediamtx.
+let runtime;
+if (runtimeTag && runtimeSumsPath) {
+  const platforms = {};
+  for (const line of readFileSync(runtimeSumsPath, 'utf8').trim().split('\n')) {
+    const [sha256, name] = line.trim().split(/\s+/);
+    for (const [suffix, key] of Object.entries(map)) {
+      if (name === `multistream-runtime_${suffix}.tar.gz`) {
+        platforms[key] = { url: `${releasesRoot}/download/${runtimeTag}/${name}`, sha256 };
+      }
+    }
+  }
+  if (Object.keys(platforms).length > 0) {
+    runtime = { tag: runtimeTag, platforms };
+  }
+}
+
 const pkg = {
   name: '@arifyaman/multistream',
   version,
@@ -46,6 +67,7 @@ const pkg = {
   scripts: { postinstall: 'node install.js' },
   files: ['install.js', 'bin/multistream.js', 'README.md'],
   binaries,
+  ...(runtime ? { runtime } : {}),
 };
 
 console.log(JSON.stringify(pkg, null, 2));

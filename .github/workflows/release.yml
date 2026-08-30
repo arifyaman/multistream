@@ -100,6 +100,10 @@ jobs:
   npm:
     runs-on: ubuntu-latest
     needs: release
+    env:
+      # The runtime bundle (ffmpeg + mediamtx) the npm postinstall downloads.
+      # Bump here when the ffbuild workflow publishes a new runtime-v* release.
+      RUNTIME_TAG: runtime-v1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -111,6 +115,15 @@ jobs:
           pattern: sha256sums-*
           merge-multiple: true
           path: sha256sums
+      - name: Fetch runtime checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p sha256sums-runtime
+          if ! gh release download "$RUNTIME_TAG" --pattern 'SHA256SUMS-runtime.txt' --dir sha256sums-runtime; then
+            echo "::error::runtime release '$RUNTIME_TAG' not found - run the ffbuild workflow (tag runtime-v*) before publishing"
+            exit 1
+          fi
       - name: Stage package
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -118,7 +131,8 @@ jobs:
           cat sha256sums/SHA256SUMS-*.txt | sort > sha256sums/SHA256SUMS.txt
           node npm/make-package.mjs "$version" sha256sums/SHA256SUMS.txt \
             "${{ github.server_url }}/${{ github.repository }}/releases" \
-            "${{ github.repository }}" > stage/package.json
+            "${{ github.repository }}" \
+            "$RUNTIME_TAG" sha256sums-runtime/SHA256SUMS-runtime.txt > stage/package.json
           cp npm/install.js stage/install.js
           cp npm/bin/multistream.js stage/bin/multistream.js
           cp npm/README.md stage/README.md

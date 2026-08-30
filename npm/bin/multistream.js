@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// CLI shim: exec the platform binary downloaded by install.js.
+// CLI shim: exec the platform binary downloaded by install.js, exposing the
+// bundled runtime dir (ffmpeg + mediamtx) via $MULTISTREAM_RUNTIME_DIR.
 
 const fs = require('fs');
 const path = require('path');
@@ -16,5 +17,12 @@ if (!fs.existsSync(binPath)) {
   process.exit(2);
 }
 
-const result = spawnSync(binPath, process.argv.slice(2), { stdio: 'inherit' });
+const env = { ...process.env };
+const runtimeDir = path.join(__dirname, '..', 'vendor', 'runtime', 'bin');
+const ffmpegName = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+if (fs.existsSync(path.join(runtimeDir, ffmpegName))) {
+  env.MULTISTREAM_RUNTIME_DIR = runtimeDir;
+}
+
+const result = spawnSync(binPath, process.argv.slice(2), { stdio: 'inherit', env });
 process.exit(result.status === null ? 1 : result.status);
