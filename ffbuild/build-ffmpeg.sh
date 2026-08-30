@@ -29,15 +29,6 @@ OUTNAME="${OUTNAME:-ffmpeg}"
 MAX_KB="${MAX_KB:-20000}"
 SRC="${SRCDIR}/ffmpeg-${VERSION}"
 
-# sha256_of works on Linux (sha256sum, coreutils or busybox) and macOS (shasum).
-sha256_of() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-
 mkdir -p "$SRCDIR"
 cd "$SRCDIR"
 if [ ! -f "ffmpeg-${VERSION}.tar.xz" ]; then
@@ -51,7 +42,18 @@ if [ ! -f "ffmpeg-${VERSION}.tar.xz" ]; then
       "https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz"
   fi
 fi
-actual="$(sha256_of "ffmpeg-${VERSION}.tar.xz")"
+ls -l "ffmpeg-${VERSION}.tar.xz"
+
+# Hash without a pipeline (a pipe failure under pipefail would die without
+# saying which tool failed).
+if command -v sha256sum >/dev/null 2>&1; then
+  hashout="$(sha256sum "ffmpeg-${VERSION}.tar.xz")" \
+    || { echo "ERROR: sha256sum failed on ffmpeg-${VERSION}.tar.xz" >&2; exit 1; }
+else
+  hashout="$(shasum -a 256 "ffmpeg-${VERSION}.tar.xz")" \
+    || { echo "ERROR: shasum failed on ffmpeg-${VERSION}.tar.xz" >&2; exit 1; }
+fi
+actual="${hashout%% *}"
 if [ "$actual" != "$SRC_SHA256" ]; then
   echo "ffmpeg source sha256 mismatch: got ${actual}, want ${SRC_SHA256}" >&2
   exit 1

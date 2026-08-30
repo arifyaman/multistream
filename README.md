@@ -547,7 +547,7 @@ OBS machine's IP if it has one.
 cmd/multistream/       thin entrypoint
 internal/cli/          flags, dispatch, command runners
 internal/config/       config loading, key file locations
-internal/supervisor/   spawns + watches the per-platform ffmpeg processes
+internal/supervisor/   spawns + watches the ffmpeg processes (and the managed relay)
 internal/daemonipc/    daemon <-> client request/response protocol
 internal/state/        state dir, pid files, supervisor state document
 internal/procscan/     /proc PID liveness + cmdline guard
@@ -556,7 +556,8 @@ internal/netmon/       /proc-based PID->connection reader (no root needed)
 internal/report/       status collection, table/JSON rendering
 internal/check/        deployment probe
 internal/version/      build metadata (-ldflags)
-npm/                   npm wrapper (postinstall binary download)
+ffbuild/               build farm for the bundled runtime (minimal ffmpeg + mediamtx)
+npm/                   npm wrapper (postinstall binary + runtime download)
 ```
 
 Conventions: stdlib only, no external Go modules; `golangci-lint`

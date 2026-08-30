@@ -22,9 +22,10 @@ The result is packaged per platform as
 ```
 
 and published to a dedicated GitHub release `runtime-v*` (tag chosen in the
-dispatch form). The npm postinstall (`npm/install.js`) downloads only the
-current platform's bundle from that release; `release.yml` carries the
-`RUNTIME_VERSION` it references.
+dispatch form, or pushed as a `runtime-v*` git tag for a reproducible
+default-versions build). The npm postinstall (`npm/install.js`) downloads
+only the current platform's bundle from that release; `release.yml` carries
+the `RUNTIME_TAG` it references.
 
 ## Files
 
@@ -52,7 +53,7 @@ current platform's bundle from that release; `release.yml` carries the
 3. For mediamtx: set `mediamtx_version` (tag) + `mediamtx_commit`
    (`git ls-remote https://github.com/bluenviron/mediamtx <tag>`).
 4. Bump `runtime_tag` (e.g. `runtime-v2`).
-5. When the run is green, update `RUNTIME_VERSION` in `.github/workflows/release.yml`
+5. When the run is green, update `RUNTIME_TAG` in `.github/workflows/release.yml`
    and cut the next app release.
 
 ## Known constraints
