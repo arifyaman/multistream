@@ -1,5 +1,7 @@
 # multistream
 
+[![npm version](https://img.shields.io/npm/v/@arifyaman/multistream)](https://www.npmjs.com/package/@arifyaman/multistream)
+
 **Stream to Twitch, Kick and YouTube at the same time - and actually know
 what is live where.**
 
@@ -160,8 +162,8 @@ Keeping the daemon alive:
 
 ## Install
 
-**npm** (prebuilt binary for your platform, SHA-256 verified at install
-time):
+**npm** ([`@arifyaman/multistream`](https://www.npmjs.com/package/@arifyaman/multistream),
+prebuilt binary for your platform, SHA-256 verified at install time):
 
 ```
 npm install -g @arifyaman/multistream
