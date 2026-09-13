@@ -78,7 +78,7 @@ func TestLegacyDaemonPIDLive(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer cmd.Process.Kill()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	go func() { _ = cmd.Wait() }() // reap: a killed child must leave /proc
 	pid := cmd.Process.Pid
 	waitForCmdline(t, pid, "multistream")
@@ -106,7 +106,7 @@ func TestLegacyDaemonPIDLiveButUnrelated(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer cmd.Process.Kill()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	go func() { _ = cmd.Wait() }()
 	pid := cmd.Process.Pid
 	waitForCmdline(t, pid, "unrelated")
