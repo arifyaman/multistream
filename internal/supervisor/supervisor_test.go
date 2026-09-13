@@ -119,6 +119,7 @@ func writeFakeFFmpeg(t *testing.T, body string) string {
 func newTestSupervisor(t *testing.T, ffmpeg string, restartDelay, limitInterval time.Duration, burst int) *Supervisor {
 	t.Helper()
 	cfg := &config.Config{
+		Name:        "test",
 		MediaMTXAPI: "http://127.0.0.1:9997",
 		IngestPath:  "live/test",
 		IngestPort:  1935,
@@ -285,6 +286,7 @@ func freeTCPPort(t *testing.T) int {
 func newTestSupervisorWithRelay(t *testing.T, ffmpeg, mediamtx string, apiPort int, restartDelay, limitInterval time.Duration, burst int) *Supervisor {
 	t.Helper()
 	cfg := &config.Config{
+		Name:           "test",
 		MediaMTXAPI:    fmt.Sprintf("http://127.0.0.1:%d", apiPort),
 		IngestPath:     "live/test",
 		IngestPort:     1935,

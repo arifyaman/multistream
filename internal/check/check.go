@@ -59,7 +59,7 @@ func Run(ctx context.Context, cfg *config.Config) int {
 		}
 	}
 
-	if daemonUp := checkDaemon(); daemonUp {
+	if daemonUp := checkDaemon(cfg.Name); daemonUp {
 		fmt.Println("daemon:       OK  running (supervising the re-broadcasters)")
 	} else {
 		code = 1
@@ -96,13 +96,13 @@ func Run(ctx context.Context, cfg *config.Config) int {
 	return code
 }
 
-// checkDaemon reports whether a daemon is currently serving IPC.
-func checkDaemon() bool {
-	dir, err := state.DirPath()
+// checkDaemon reports whether the profile's daemon is currently serving IPC.
+func checkDaemon(profile string) bool {
+	dir, err := state.DirPath(profile)
 	if err != nil {
 		return false
 	}
-	network, addr := state.IPCNetworkAddr(dir)
+	network, addr := state.IPCNetworkAddr(dir, profile)
 	return daemonipc.Ping(network, addr) == nil
 }
 

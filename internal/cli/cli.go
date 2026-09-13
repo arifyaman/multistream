@@ -15,6 +15,7 @@ import (
 // error.
 func Execute(args []string) int {
 	cfgPath := ""
+	profile := ""
 	showVersion := false
 	rest := append([]string(nil), args...)
 	for i := 0; i < len(rest); i++ {
@@ -26,6 +27,14 @@ func Execute(args []string) int {
 				return 2
 			}
 			cfgPath = rest[i+1]
+			rest = append(rest[:i], rest[i+2:]...)
+			i--
+		case "-profile", "--profile":
+			if i+1 >= len(rest) {
+				fmt.Fprintln(os.Stderr, "multistream: -profile needs a value")
+				return 2
+			}
+			profile = rest[i+1]
 			rest = append(rest[:i], rest[i+2:]...)
 			i--
 		case "-version", "--version":
@@ -52,9 +61,14 @@ func Execute(args []string) int {
 		cmd, rest = rest[0], rest[1:]
 	}
 
-	cfg, err := config.LoadConfig(cfgPath)
+	file, err := config.LoadConfig(cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "multistream:", err)
+		return 2
+	}
+	cfg, err := file.Select(profile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "multistream: %v\n", err)
 		return 2
 	}
 

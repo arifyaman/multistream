@@ -281,6 +281,10 @@ example above is only for readability). The daemon reads those files to expand
 the `${TWITCH_KEY}` / `${KICK_KEY}` templates in the push URLs; the read-only
 commands only check that the files exist and never print the keys.
 
+This is a single-profile config: a file without a `profiles` map is one
+implicit `default` profile. To let other people stream through the same
+relay, see [Profiles (multiple users)](#profiles-multiple-users).
+
 ### 3. Start the daemon
 
 Run it in a terminal to try it:
@@ -377,7 +381,9 @@ multistream config
 | `daemon` | run the supervisor in the foreground: spawn one ffmpeg per platform and keep them alive, plus the mediamtx relay when `manage_mediamtx` is set. Keep it running with a service manager (see step 3). |
 | `config` | print the effective configuration (key values are never read or printed). |
 
-Global flags: `-config <file>`, `-version`, `-h`.
+Global flags: `-config <file>`, `-profile <name>` (which profile a command
+acts on in a multi-profile config; default: `$MULTISTREAM_PROFILE`, then
+`default_profile`, then `default`), `-version`, `-h`.
 
 ## Configuration
 
@@ -387,9 +393,10 @@ in this order: `-config <file>`, `$MULTISTREAM_CONFIG`, the per-user config
 dir (`~/.config/multistream/config.json` on Linux), `/etc/multistream/config.json`,
 `./config.json`.
 
-What you always set: `mediamtx_api`, `ingest_path`, `keys_dir`, and one
-`platforms[]` entry per platform (`name` + `push_url` with a `${KEY}`
-template). Everything else has a sensible default.
+What you always set, per profile: `mediamtx_api`, `ingest_path`, `keys_dir`,
+and one `platforms[]` entry per platform (`name` + `push_url` with a `${KEY}`
+template). Everything else has a sensible default. For one file per user,
+see [Profiles (multiple users)](#profiles-multiple-users).
 
 ## Keys
 
@@ -430,6 +437,74 @@ Security:
   `systemctl --user restart multistream`) - a platform's key is resolved once
   when the daemon starts, so `multistream restart <platform>` alone will not
   pick up the new value.
+
+## Profiles (multiple users)
+
+To let other people stream through the same relay, give each of them their
+own **profile** in the same config file. A profile is one user's whole
+chain: their ingest path, their key files, their platforms, their daemon.
+
+```json
+{
+  "default_profile": "me",
+  "profiles": {
+    "me": {
+      "mediamtx_api": "http://127.0.0.1:9997",
+      "ingest_path": "live/MY_LONG_RANDOM_NAME",
+      "keys_dir": "/etc/multistream/keys/me",
+      "platforms": [ ... ]
+    },
+    "friend": {
+      "mediamtx_api": "http://127.0.0.1:9997",
+      "ingest_path": "live/THEIR_LONG_RANDOM_NAME",
+      "keys_dir": "/etc/multistream/keys/friend",
+      "platforms": [ ... ]
+    }
+  }
+}
+```
+
+- Every profile points at the **same shared relay service** (one mediamtx);
+  what differs per user is the `ingest_path` they push to. Give every user
+  their own long random path, exactly like your own.
+- Each profile has its own `keys_dir`, so each user's 0600 key files stay
+  apart from the others'.
+- Each profile runs its own daemon - `multistream -profile friend daemon` -
+  with its own state directory, so one profile's failures or restart limits
+  never touch another's. Run at most one profile's daemon at a time.
+- A command acts on one profile: the `-profile <name>` flag, then
+  `$MULTISTREAM_PROFILE`, then `default_profile`, then a profile named
+  `default`. A config file without a `profiles` map keeps working: it is one
+  implicit `default` profile.
+
+To move an existing single-user setup over: stop the old daemon cleanly
+(`systemctl --user stop multistream`), keep or restructure the config as
+above (a file without a `profiles` map still works as the implicit
+`default` profile), and start the daemon again - state then lives in a
+per-profile subdirectory, and any old flat state is left for you to move or
+delete.
+
+To keep profiles alive under systemd, use a template unit
+(`~/.config/systemd/user/multistream@.service`):
+
+```ini
+[Unit]
+Description=multistream re-broadcast supervisor (%i profile)
+After=network-online.target
+
+[Service]
+ExecStart=/home/YOUR_USER/.local/bin/multistream -profile %i daemon
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+```
+systemctl --user enable --now multistream@me
+```
+
+Full field reference: [CONFIG.md](CONFIG.md#profiles).
 
 ## OBS settings that matter
 
@@ -494,6 +569,10 @@ paths:
     alwaysAvailable: true
     alwaysAvailableFile: /etc/multistream/away.mp4
 ```
+
+With [profiles](#profiles-multiple-users) on one shared relay, add one such
+path block per user's ingest path (the same away file is fine for all of
+them).
 
 Then `sudo systemctl restart mediamtx`. Without `alwaysAvailableFile`,
 mediamtx serves a built-in black video + silence instead (then set

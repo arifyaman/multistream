@@ -90,6 +90,7 @@ type RelayStatus struct {
 // StatusReport is the full picture the CLI prints.
 type StatusReport struct {
 	Time            time.Time        `json:"time"`
+	Profile         string           `json:"profile,omitempty"`
 	DaemonUp        bool             `json:"daemon_up"`
 	Ingest          IngestStatus     `json:"ingest"`
 	Platforms       []PlatformStatus `json:"platforms"`
@@ -115,19 +116,19 @@ func NewCollector(cfg *config.Config, stateDir string) *Collector {
 	return &Collector{cfg: cfg, client: mediamtx.NewClient(cfg.MediaMTXAPI), stateDir: stateDir}
 }
 
-// daemonUp reports whether a daemon is currently serving IPC.
+// daemonUp reports whether the profile's daemon is currently serving IPC.
 func (c *Collector) daemonUp() bool {
 	if c.stateDir == "" {
 		return false
 	}
-	network, addr := state.IPCNetworkAddr(c.stateDir)
+	network, addr := state.IPCNetworkAddr(c.stateDir, c.cfg.Name)
 	return daemonipc.Ping(network, addr) == nil
 }
 
 // Collect takes one snapshot of the whole chain.
 func (c *Collector) Collect(ctx context.Context) (*StatusReport, error) {
 	up := c.daemonUp()
-	rep := &StatusReport{Time: time.Now(), DaemonUp: up, ExpectedReaders: len(c.cfg.Platforms)}
+	rep := &StatusReport{Time: time.Now(), Profile: c.cfg.Name, DaemonUp: up, ExpectedReaders: len(c.cfg.Platforms)}
 	c.collectIngest(ctx, rep)
 	for _, p := range c.cfg.Platforms {
 		rep.Platforms = append(rep.Platforms, c.collectPlatform(p, up))

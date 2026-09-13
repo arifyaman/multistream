@@ -35,6 +35,8 @@ Usage:
 Flags:
   -config string    config file (default: $MULTISTREAM_CONFIG, per-user config
                     dir, /etc/multistream/config.json, ./config.json)
+  -profile string   profile from the config's profiles map (default:
+                    $MULTISTREAM_PROFILE, then default_profile, then "default")
   -version          print version and exit
   -h, --help        show this help
 
@@ -47,10 +49,10 @@ status flags:
 Exit codes: 0 all healthy, 1 something down, 2 usage/config error.
 `
 
-// stateDirOrEmpty resolves the state directory path, returning "" on error
-// (read-only commands still work, just without daemon awareness).
-func stateDirOrEmpty() string {
-	d, err := state.DirPath()
+// stateDirOrEmpty resolves a profile's state directory path, returning ""
+// on error (read-only commands still work, just without daemon awareness).
+func stateDirOrEmpty(profile string) string {
+	d, err := state.DirPath(profile)
 	if err != nil {
 		return ""
 	}
@@ -89,7 +91,7 @@ func runStatus(cfg *config.Config, args []string) int {
 	}
 
 	colored := report.ColorEnabled(noColor)
-	c := report.NewCollector(cfg, stateDirOrEmpty())
+	c := report.NewCollector(cfg, stateDirOrEmpty(cfg.Name))
 	ctx := context.Background()
 
 	if !watch {
@@ -167,12 +169,12 @@ func runRestart(cfg *config.Config, args []string) int {
 		fmt.Fprintf(os.Stderr, "multistream: unknown platform %q (see: multistream config)\n", name)
 		return 2
 	}
-	dir := stateDirOrEmpty()
+	dir := stateDirOrEmpty(cfg.Name)
 	if dir == "" {
 		fmt.Fprintln(os.Stderr, "multistream: cannot resolve state directory")
 		return 1
 	}
-	network, addr := state.IPCNetworkAddr(dir)
+	network, addr := state.IPCNetworkAddr(dir, cfg.Name)
 	if err := daemonipc.Restart(network, addr, name); err != nil {
 		fmt.Fprintf(os.Stderr, "multistream: cannot restart %s: %v\n", name, err)
 		fmt.Fprintln(os.Stderr, "  the daemon is not running - a restart here would be unsupervised.")
@@ -185,7 +187,18 @@ func runRestart(cfg *config.Config, args []string) int {
 
 // runDaemon runs the supervisor in the foreground until interrupted.
 func runDaemon(cfg *config.Config) int {
-	dir, err := state.StateDir()
+	root, err := state.RootPath()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "multistream:", err)
+		return 2
+	}
+	// Refuse before creating anything: a pre-profile daemon still running
+	// would end up supervising the same platforms as the new one.
+	if pid, running := supervisor.LegacyDaemonPID(root); running {
+		fmt.Fprintf(os.Stderr, "multistream daemon: a multistream daemon from before the profile upgrade is still running (pid %d); stop it, then start the profile daemon again\n", pid)
+		return 1
+	}
+	dir, err := state.StateDir(cfg.Name)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "multistream:", err)
 		return 2
@@ -201,7 +214,7 @@ func runDaemon(cfg *config.Config) int {
 	if cfg.ManageMediaMTX {
 		what += "; relay: managed"
 	}
-	fmt.Printf("multistream daemon running (state %s), %s\n", dir, what)
+	fmt.Printf("multistream daemon (profile %s) running (state %s), %s\n", cfg.Name, dir, what)
 	if err := sup.Start(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "multistream daemon:", err)
 		return 1
@@ -211,6 +224,7 @@ func runDaemon(cfg *config.Config) int {
 
 func runConfig(cfg *config.Config) {
 	fmt.Printf("config file:  %s\n", cfg.Source())
+	fmt.Printf("profile:      %s\n", cfg.Name)
 	fmt.Printf("mediamtx api: %s\n", cfg.MediaMTXAPI)
 	fmt.Printf("ingest:       %s (port %d)\n", cfg.IngestPath, cfg.IngestPort)
 	fmt.Printf("refresh:      %ds\n", cfg.RefreshSec)

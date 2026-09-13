@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -16,6 +18,17 @@ import (
 // EnvRuntimeDir is set by the npm CLI shim to the directory holding the
 // bundled runtime binaries (ffmpeg, mediamtx) downloaded at install time.
 const EnvRuntimeDir = "MULTISTREAM_RUNTIME_DIR"
+
+// EnvProfile selects a profile when -profile is not given.
+const EnvProfile = "MULTISTREAM_PROFILE"
+
+// DefaultProfileName is the name of the implicit profile in a legacy config
+// file (one without a "profiles" map).
+const DefaultProfileName = "default"
+
+// profileNameRe bounds profile names: they become directory names and part
+// of a Windows pipe name, so they stay conservative.
+var profileNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // Platform is one re-broadcast destination.
 type Platform struct {
@@ -28,8 +41,14 @@ type Platform struct {
 	PushURL string `json:"push_url"`
 }
 
-// Config is the CLI configuration, loaded from a JSON file.
+// Config is one profile's configuration: one user's streaming chain (the
+// relay endpoint to pull from, the keys, and the platforms to re-broadcast
+// to). A config file holds one or more profiles (see File).
 type Config struct {
+	// Name is the profile name this config was loaded under ("default" in a
+	// legacy file). It is not part of the JSON: the loader sets it from the
+	// profile key or from DefaultProfileName.
+	Name string `json:"-"`
 	// MediaMTXAPI is the mediamtx Control API base URL (loopback).
 	MediaMTXAPI string `json:"mediamtx_api"`
 	// IngestPath is the mediamtx path OBS publishes to (e.g. "live/<name>").
@@ -78,6 +97,51 @@ type Config struct {
 
 // Source returns the file path the config was loaded from.
 func (c *Config) Source() string { return c.src }
+
+// File is a loaded config file: a set of named profiles, or a single
+// implicit profile in a legacy file that has no "profiles" map.
+type File struct {
+	DefaultProfile string
+	profiles       map[string]*Config
+	src            string
+}
+
+// Source returns the file path the file was loaded from.
+func (f *File) Source() string { return f.src }
+
+// ProfileNames returns the profile names in the file, sorted.
+func (f *File) ProfileNames() []string {
+	names := make([]string, 0, len(f.profiles))
+	for n := range f.profiles {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// Select resolves a profile: an explicit name (the -profile flag or the
+// MULTISTREAM_PROFILE env var), else default_profile, else a profile named
+// "default".
+func (f *File) Select(name string) (*Config, error) {
+	if name == "" {
+		name = os.Getenv(EnvProfile)
+	}
+	if name == "" {
+		if f.DefaultProfile != "" {
+			name = f.DefaultProfile
+		} else {
+			name = DefaultProfileName
+		}
+	}
+	if cfg, ok := f.profiles[name]; ok {
+		return cfg, nil
+	}
+	if name == DefaultProfileName && f.DefaultProfile == "" {
+		return nil, fmt.Errorf("no profile named %q and no default_profile set; pass -profile or set default_profile (available: %s)",
+			name, strings.Join(f.ProfileNames(), ", "))
+	}
+	return nil, fmt.Errorf("profile %q not found (available: %s)", name, strings.Join(f.ProfileNames(), ", "))
+}
 
 // PlatformByName looks up a platform by name.
 func (c *Config) PlatformByName(name string) (*Platform, bool) {
@@ -161,9 +225,11 @@ func DefaultConfigPaths() []string {
 	return paths
 }
 
-// LoadConfig reads and validates the config from path, or from the first
-// default location that exists when path is empty.
-func LoadConfig(path string) (*Config, error) {
+// LoadConfig reads and validates the config file at path (or the first
+// default location that exists when path is empty) and returns its
+// profiles. A file without a "profiles" map is a legacy single-profile
+// file: its top-level fields are one implicit profile named "default".
+func LoadConfig(path string) (*File, error) {
 	if path == "" {
 		for _, p := range DefaultConfigPaths() {
 			if _, err := os.Stat(p); err == nil {
@@ -180,15 +246,95 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	var c Config
-	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
-	}
-	if err := c.validate(); err != nil {
+	var f File
+	f.src = path
+	if err := f.parse(data); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
-	c.src = path
-	return &c, nil
+	return &f, nil
+}
+
+// fileDoc is the new multi-profile file shape.
+type fileDoc struct {
+	DefaultProfile string             `json:"default_profile"`
+	Profiles       map[string]*Config `json:"profiles"`
+}
+
+func (f *File) parse(data []byte) error {
+	var doc fileDoc
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parse: %w", err)
+	}
+	f.DefaultProfile = doc.DefaultProfile
+	f.profiles = map[string]*Config{}
+
+	if len(doc.Profiles) == 0 {
+		// Legacy single-profile file: the top-level fields are one implicit
+		// profile named "default".
+		if f.DefaultProfile != "" {
+			return fmt.Errorf("default_profile is set but the file has no profiles map")
+		}
+		var c Config
+		if err := json.Unmarshal(data, &c); err != nil {
+			return fmt.Errorf("parse: %w", err)
+		}
+		c.Name = DefaultProfileName
+		c.src = f.src
+		f.profiles[DefaultProfileName] = &c
+		return f.validate()
+	}
+
+	// A profiles map and top-level profile fields are two different file
+	// shapes; mixing them is always a mistake, so refuse it.
+	var probe Config
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return fmt.Errorf("parse: %w", err)
+	}
+	if probe.MediaMTXAPI != "" || probe.IngestPath != "" || probe.IngestPort != 0 ||
+		probe.RefreshSec != 0 || probe.KeysDir != "" || probe.AwayFile != "" ||
+		probe.FFmpegPath != "" || probe.ManageMediaMTX || probe.MediaMTXPath != "" ||
+		probe.RestartSec != 0 || probe.StartLimitIntervalSec != 0 || probe.StartLimitBurst != 0 ||
+		len(probe.Platforms) > 0 {
+		return fmt.Errorf("top-level profile fields (mediamtx_api, ingest_path, platforms, ...) cannot be mixed with a profiles map; move them into profiles.<name>")
+	}
+
+	for name, c := range doc.Profiles {
+		if !profileNameRe.MatchString(name) {
+			return fmt.Errorf("profile name %q is invalid: must match %s", name, profileNameRe.String())
+		}
+		c.Name = name
+		c.src = f.src
+		f.profiles[name] = c
+	}
+	return f.validate()
+}
+
+func (f *File) validate() error {
+	for _, name := range f.ProfileNames() {
+		if err := f.profiles[name].validate(); err != nil {
+			return fmt.Errorf("profile %q: %w", name, err)
+		}
+	}
+	if f.DefaultProfile != "" {
+		if _, ok := f.profiles[f.DefaultProfile]; !ok {
+			return fmt.Errorf("default_profile %q not found (available: %s)",
+				f.DefaultProfile, strings.Join(f.ProfileNames(), ", "))
+		}
+	}
+	// Two profiles must never pull the same relay stream (same port and
+	// path): they would re-broadcast the same feed, and the daemon's
+	// process-level lookups (orphan cleanup, the stateless status fallback)
+	// could no longer tell their ffmpeg processes apart.
+	seen := map[int]string{}
+	for _, name := range f.ProfileNames() {
+		c := f.profiles[name]
+		if other, ok := seen[c.IngestPort]; ok && other == c.IngestPath {
+			return fmt.Errorf("profiles %q and %q both use ingest port %d with path %q",
+				other, name, c.IngestPort, c.IngestPath)
+		}
+		seen[c.IngestPort] = c.IngestPath
+	}
+	return nil
 }
 
 func (c *Config) validate() error {

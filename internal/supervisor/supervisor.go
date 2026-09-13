@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -125,7 +126,7 @@ func New(cfg *config.Config, dir string) (*Supervisor, error) {
 // It binds the IPC endpoint first, which doubles as the single-instance
 // guard: a second daemon fails to start while one is running.
 func (s *Supervisor) Start(ctx context.Context) error {
-	network, addr := state.IPCNetworkAddr(s.dir)
+	network, addr := state.IPCNetworkAddr(s.dir, s.cfg.Name)
 	s.ipc = daemonipc.NewServer(network, addr, s.Restart)
 	if err := s.ipc.Listen(); err != nil {
 		return fmt.Errorf("start IPC endpoint (is another multistream daemon running?): %w", err)
@@ -292,6 +293,34 @@ func (s *Supervisor) spawn(p *platform) (*exec.Cmd, error) {
 		return nil, err
 	}
 	return cmd, nil
+}
+
+// LegacyDaemonPID reports whether a pre-profile daemon (one that used the
+// flat state root, before state moved to a per-profile subdirectory) is
+// still running, from its pid file in the root. The new daemon refuses to
+// start while one is running: two daemons would supervise the same
+// platforms and push each of them twice. The stale files a stopped legacy
+// daemon leaves behind are ignored on purpose - what to do with them (move
+// or delete) is the operator's decision, not the daemon's.
+func LegacyDaemonPID(root string) (int, bool) {
+	pid, ok := state.ReadPid(state.DaemonPidFile(root))
+	if !ok || !legacyDaemonAlive(pid) {
+		return 0, false
+	}
+	return pid, true
+}
+
+// legacyDaemonAlive reports whether a pid is still a running multistream
+// daemon.
+func legacyDaemonAlive(pid int) bool {
+	if !procscan.Alive(pid) {
+		return false
+	}
+	if runtime.GOOS == "linux" {
+		// On Linux confirm the recycled pid is not an unrelated process.
+		return strings.Contains(procscan.CommandLine(pid), "multistream")
+	}
+	return true
 }
 
 // cleanupOrphan kills a stale ffmpeg for p left behind by a previously

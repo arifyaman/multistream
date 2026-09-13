@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,28 @@ const validConfig = `{
   ]
 }`
 
+const twoProfiles = `{
+  "default_profile": "me",
+  "profiles": {
+    "me": {
+      "mediamtx_api": "http://127.0.0.1:9997",
+      "ingest_path": "live/me",
+      "keys_dir": "/etc/multistream/keys/me",
+      "platforms": [
+        {"name": "twitch", "push_url": "rtmp://live.twitch.tv/app/${TWITCH_KEY}"}
+      ]
+    },
+    "friend": {
+      "mediamtx_api": "http://127.0.0.1:9997",
+      "ingest_path": "live/friend",
+      "keys_dir": "/etc/multistream/keys/friend",
+      "platforms": [
+        {"name": "youtube", "push_url": "rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_STREAM_NAME}"}
+      ]
+    }
+  }
+}`
+
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -23,11 +46,25 @@ func writeConfig(t *testing.T, content string) string {
 	return path
 }
 
-func TestLoadConfigValid(t *testing.T) {
-	path := writeConfig(t, validConfig)
-	cfg, err := LoadConfig(path)
+// loadProfile loads content and selects its profile with name ("" lets the
+// normal default resolution run).
+func loadProfile(t *testing.T, content, name string) *Config {
+	t.Helper()
+	file, err := LoadConfig(writeConfig(t, content))
 	if err != nil {
 		t.Fatal(err)
+	}
+	cfg, err := file.Select(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func TestLoadConfigValid(t *testing.T) {
+	cfg := loadProfile(t, validConfig, "")
+	if cfg.Name != DefaultProfileName {
+		t.Errorf("legacy file profile name = %q, want %q", cfg.Name, DefaultProfileName)
 	}
 	if cfg.IngestPort != 1935 {
 		t.Errorf("default ingest port = %d, want 1935", cfg.IngestPort)
@@ -45,8 +82,8 @@ func TestLoadConfigValid(t *testing.T) {
 	if got, want := cfg.InputURL(), "rtmp://127.0.0.1:1935/live/test"; got != want {
 		t.Errorf("InputURL = %q, want %q", got, want)
 	}
-	if cfg.Source() != path {
-		t.Errorf("source = %q, want %q", cfg.Source(), path)
+	if cfg.Source() == "" {
+		t.Errorf("source = %q, want the config path", cfg.Source())
 	}
 	p, ok := cfg.PlatformByName("twitch")
 	if !ok {
@@ -61,7 +98,7 @@ func TestLoadConfigValid(t *testing.T) {
 }
 
 func TestLoadConfigDefaultsApplied(t *testing.T) {
-	path := writeConfig(t, `{
+	cfg := loadProfile(t, `{
 		"mediamtx_api": "http://127.0.0.1:9997",
 		"ingest_path": "live/test",
 		"ingest_port": 9999,
@@ -72,11 +109,7 @@ func TestLoadConfigDefaultsApplied(t *testing.T) {
 		"platforms": [
 			{"name": "a", "push_url": "rtmp://h/p"}
 		]
-	}`)
-	cfg, err := LoadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	}`, "")
 	if cfg.IngestPort != 9999 || cfg.RefreshSec != 5 {
 		t.Errorf("explicit values not preserved: %+v", cfg)
 	}
@@ -92,10 +125,7 @@ func TestLoadConfigDefaultsApplied(t *testing.T) {
 }
 
 func TestLoadConfigAwayFileOptional(t *testing.T) {
-	cfg, err := LoadConfig(writeConfig(t, validConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := loadProfile(t, validConfig, "")
 	if cfg.AwayFile != "" {
 		t.Errorf("away_file = %q, want empty when unset", cfg.AwayFile)
 	}
@@ -144,6 +174,158 @@ func TestLoadConfigErrors(t *testing.T) {
 func TestLoadConfigMissingFile(t *testing.T) {
 	if _, err := LoadConfig("/nonexistent/config.json"); err == nil {
 		t.Error("want error for missing file")
+	}
+}
+
+func TestProfilesMapSelection(t *testing.T) {
+	// Explicit name wins.
+	cfg := loadProfile(t, twoProfiles, "friend")
+	if cfg.Name != "friend" || cfg.IngestPath != "live/friend" {
+		t.Errorf("selected = %q (ingest %q), want friend", cfg.Name, cfg.IngestPath)
+	}
+	// Without an explicit name, default_profile wins.
+	cfg = loadProfile(t, twoProfiles, "")
+	if cfg.Name != "me" {
+		t.Errorf("default selection = %q, want me (default_profile)", cfg.Name)
+	}
+	// The MULTISTREAM_PROFILE env var is next in line.
+	file, err := LoadConfig(writeConfig(t, twoProfiles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvProfile, "friend")
+	cfg, err = file.Select("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "friend" {
+		t.Errorf("env selection = %q, want friend", cfg.Name)
+	}
+	// ...and an explicit name beats the env var.
+	t.Setenv(EnvProfile, "friend")
+	cfg, err = file.Select("me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "me" {
+		t.Errorf("explicit selection = %q, want me", cfg.Name)
+	}
+}
+
+func TestProfilesMapFallbackWithoutDefaultProfile(t *testing.T) {
+	content := `{
+  "profiles": {
+    "me": {
+      "mediamtx_api": "http://127.0.0.1:9997",
+      "ingest_path": "live/me",
+      "platforms": [{"name": "twitch", "push_url": "rtmp://h/k"}]
+    }
+  }
+}`
+	file, err := LoadConfig(writeConfig(t, content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Select(""); err == nil {
+		t.Error("want error: no default_profile and no profile named default")
+	} else if !strings.Contains(err.Error(), "-profile") {
+		t.Errorf("error should hint at -profile: %v", err)
+	}
+	cfg, err := file.Select("me")
+	if err != nil {
+		t.Fatalf("explicit selection should work: %v", err)
+	}
+	if cfg.Name != "me" {
+		t.Errorf("selected = %q, want me", cfg.Name)
+	}
+}
+
+func TestSelectUnknownProfile(t *testing.T) {
+	file, err := LoadConfig(writeConfig(t, twoProfiles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Select("nope"); err == nil {
+		t.Error("want error for unknown profile")
+	} else if !strings.Contains(err.Error(), "friend") || !strings.Contains(err.Error(), "me") {
+		t.Errorf("error should list available profiles: %v", err)
+	}
+	// A legacy file has exactly one profile, "default".
+	legacy, err := LoadConfig(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Select("friend"); err == nil {
+		t.Error("want error: a legacy file has only the implicit default profile")
+	}
+}
+
+func TestDefaultProfileMustExist(t *testing.T) {
+	content := strings.Replace(twoProfiles, `"default_profile": "me"`, `"default_profile": "someone"`, 1)
+	if _, err := LoadConfig(writeConfig(t, content)); err == nil {
+		t.Error("want error for unknown default_profile")
+	}
+}
+
+func TestDefaultProfileInLegacyFileIsAnError(t *testing.T) {
+	content := `{"default_profile": "me", "mediamtx_api": "http://127.0.0.1:9997", "ingest_path": "a", "platforms": [{"name": "a", "push_url": "rtmp://h/p"}]}`
+	if _, err := LoadConfig(writeConfig(t, content)); err == nil {
+		t.Error("want error: default_profile set without a profiles map")
+	}
+}
+
+func TestMixingProfilesAndTopLevelFieldsIsAnError(t *testing.T) {
+	content := `{
+  "profiles": {
+    "me": {
+      "mediamtx_api": "http://127.0.0.1:9997",
+      "ingest_path": "live/me",
+      "platforms": [{"name": "a", "push_url": "rtmp://h/p"}]
+    }
+  },
+  "platforms": [{"name": "a", "push_url": "rtmp://h/p"}]
+}`
+	if _, err := LoadConfig(writeConfig(t, content)); err == nil {
+		t.Error("want error for top-level platforms alongside a profiles map")
+	}
+}
+
+func TestProfileNameValidation(t *testing.T) {
+	// Replace one profile key with an invalid name.
+	cases := []string{
+		`"Bad Name"`,
+		`"9lead"`,
+		`"UPPER"`,
+		`"a_b_c_d_e_f_g_h_i_j_k_l_m_n_o_p_q_r_s_t_u_v_w_x"`, // 33 chars
+	}
+	for _, key := range cases {
+		content := strings.Replace(twoProfiles, `"me":`, key+":", 1)
+		if _, err := LoadConfig(writeConfig(t, content)); err == nil {
+			t.Errorf("want error for profile name %s", key)
+		}
+	}
+}
+
+func TestCrossProfileIngestCollision(t *testing.T) {
+	// Same port and path in two profiles: refused.
+	content := strings.Replace(twoProfiles, `live/friend`, `live/me`, 1)
+	if _, err := LoadConfig(writeConfig(t, content)); err == nil {
+		t.Error("want error for duplicate (ingest_port, ingest_path) across profiles")
+	}
+	// Same path on a different port is fine (different relays).
+	content = strings.Replace(twoProfiles, `"ingest_path": "live/friend"`, `"ingest_path": "live/me", "ingest_port": 1936`, 1)
+	if _, err := LoadConfig(writeConfig(t, content)); err != nil {
+		t.Errorf("same path on a different port should be allowed: %v", err)
+	}
+	// Default port: two profiles omitting ingest_port must still differ in path.
+	content = `{
+  "profiles": {
+    "a": {"mediamtx_api": "http://127.0.0.1:9997", "ingest_path": "live/a", "platforms": [{"name": "p", "push_url": "rtmp://h/p"}]},
+    "b": {"mediamtx_api": "http://127.0.0.1:9997", "ingest_path": "live/a", "platforms": [{"name": "p", "push_url": "rtmp://h/p"}]}
+  }
+}`
+	if _, err := LoadConfig(writeConfig(t, content)); err == nil {
+		t.Error("want error: default ingest port must still be checked for collisions")
 	}
 }
 
@@ -208,10 +390,7 @@ func TestManageMediaMTXRequiresLoopbackAPI(t *testing.T) {
   "mediamtx_path": "/opt/mediamtx",
   "platforms": [{"name": "a", "push_url": "rtmp://h/p"}]
 }`
-	cfg, err := LoadConfig(writeConfig(t, content))
-	if err != nil {
-		t.Fatalf("loopback api with manage_mediamtx should be valid: %v", err)
-	}
+	cfg := loadProfile(t, content, "")
 	if !cfg.ManageMediaMTX || cfg.MediaMTXPath != "/opt/mediamtx" {
 		t.Errorf("managed fields = (%v, %q)", cfg.ManageMediaMTX, cfg.MediaMTXPath)
 	}

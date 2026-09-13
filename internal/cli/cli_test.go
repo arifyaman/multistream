@@ -16,13 +16,33 @@ const minimalConfig = `{
   ]
 }`
 
-func writeConfig(t *testing.T) string {
+const profilesConfig = `{
+  "default_profile": "me",
+  "profiles": {
+    "me": {
+      "mediamtx_api": "http://127.0.0.1:9997",
+      "ingest_path": "live/me",
+      "platforms": [{"name": "twitch", "push_url": "rtmp://h/k"}]
+    },
+    "friend": {
+      "mediamtx_api": "http://127.0.0.1:9997",
+      "ingest_path": "live/friend",
+      "platforms": [{"name": "youtube", "push_url": "rtmp://h/k"}]
+    }
+  }
+}`
+
+func writeConfigContent(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(minimalConfig), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func writeConfig(t *testing.T) string {
+	return writeConfigContent(t, minimalConfig)
 }
 
 func TestExecuteVersion(t *testing.T) {
@@ -82,5 +102,30 @@ func TestExecuteStatusFlagsValidation(t *testing.T) {
 	}
 	if code := Execute([]string{"-config", path, "status", "--interval", "0"}); code != 2 {
 		t.Errorf("Execute(status --interval 0) = %d, want 2", code)
+	}
+}
+
+func TestExecuteProfileSelection(t *testing.T) {
+	// Without -profile the default profile is used.
+	path := writeConfigContent(t, profilesConfig)
+	if code := Execute([]string{"-config", path, "config"}); code != 0 {
+		t.Errorf("Execute(config) = %d, want 0", code)
+	}
+	// An explicit -profile selects another profile.
+	if code := Execute([]string{"-config", path, "-profile", "friend", "config"}); code != 0 {
+		t.Errorf("Execute(-profile friend config) = %d, want 0", code)
+	}
+	// An unknown profile is a usage error.
+	if code := Execute([]string{"-config", path, "-profile", "nope", "config"}); code != 2 {
+		t.Errorf("Execute(-profile nope config) = %d, want 2", code)
+	}
+	// -profile without a value is a usage error.
+	if code := Execute([]string{"-config", path, "-profile"}); code != 2 {
+		t.Errorf("Execute(-profile without value) = %d, want 2", code)
+	}
+	// A legacy file has only the implicit default profile.
+	legacy := writeConfig(t)
+	if code := Execute([]string{"-config", legacy, "-profile", "friend", "config"}); code != 2 {
+		t.Errorf("Execute(legacy, -profile friend) = %d, want 2", code)
 	}
 }

@@ -18,26 +18,47 @@ func mustMarshal(t *testing.T, v interface{}) []byte {
 	return b
 }
 
-func TestDirPathEnvOverride(t *testing.T) {
+func TestRootPathEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(envState, dir)
-	got, err := DirPath()
+	got, err := RootPath()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != dir {
-		t.Errorf("DirPath = %q, want %q", got, dir)
+		t.Errorf("RootPath = %q, want %q", got, dir)
 	}
-	// StateDir must return the same path and create it.
-	got2, err := StateDir()
+}
+
+func TestDirPathAndStateDirPerProfile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envState, dir)
+	profile := "alice"
+
+	got, err := DirPath(profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got2 != dir {
-		t.Errorf("StateDir = %q, want %q", got2, dir)
+	if got != filepath.Join(dir, profile) {
+		t.Errorf("DirPath(%q) = %q, want %q", profile, got, filepath.Join(dir, profile))
 	}
-	if _, err := os.Stat(dir); err != nil {
+	// DirPath must not create anything.
+	if _, err := os.Stat(got); !os.IsNotExist(err) {
+		t.Errorf("DirPath created the dir: %v", err)
+	}
+
+	got2, err := StateDir(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2 != got {
+		t.Errorf("StateDir = %q, want %q", got2, got)
+	}
+	if st, err := os.Stat(got2); err != nil || !st.IsDir() {
 		t.Errorf("StateDir did not create dir: %v", err)
+	}
+	if st, _ := os.Stat(got2); st.Mode().Perm() != 0o700 {
+		t.Errorf("StateDir permissions = %o, want 700", st.Mode().Perm())
 	}
 }
 
@@ -55,18 +76,18 @@ func TestFilePaths(t *testing.T) {
 }
 
 func TestIPCNetworkAddr(t *testing.T) {
-	network, addr := IPCNetworkAddr("/some/dir")
+	network, addr := IPCNetworkAddr("/some/dir", "alice")
 	if runtime.GOOS == "windows" {
-		if network != "tcp" || addr != `\\.\pipe\multistream` {
-			t.Errorf("got (%q, %q), want the named pipe endpoint", network, addr)
+		if network != "tcp" || addr != `\\.\pipe\multistream-alice` {
+			t.Errorf("got (%q, %q), want the per-profile named pipe endpoint", network, addr)
 		}
 		return
 	}
 	if network != "unix" {
 		t.Errorf("network = %q, want unix", network)
 	}
-	if !filepath.IsAbs(addr) || filepath.Ext(addr) != ".sock" {
-		t.Errorf("addr = %q, want an absolute .sock path", addr)
+	if addr != "/some/dir/multistream.sock" {
+		t.Errorf("addr = %q, want an absolute .sock path inside the profile dir", addr)
 	}
 }
 
@@ -144,5 +165,12 @@ func TestReadPid(t *testing.T) {
 	}
 	if _, ok := ReadPid(p); ok {
 		t.Error("zero pid should not parse")
+	}
+	// A trailing newline (hand-written pid files) is tolerated.
+	if err := os.WriteFile(p, []byte("42\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := ReadPid(p); !ok || n != 42 {
+		t.Errorf("ReadPid with trailing newline = (%d, %v), want (42, true)", n, ok)
 	}
 }

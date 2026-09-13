@@ -12,18 +12,20 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
-// envState overrides the state directory (used by tests and unusual
-// layouts). Unset by default.
+// envState overrides the state root (used by tests and unusual layouts).
+// Unset by default.
 const envState = "MULTISTREAM_STATE"
 
-// DirPath returns the multistream state directory path without creating it.
-// It follows the per-OS conventions (XDG state dir on Linux,
-// %LOCALAPPDATA% on Windows, ~/Library/Application Support on macOS) and can
-// be overridden with $MULTISTREAM_STATE for tests and unusual layouts.
-func DirPath() (string, error) {
+// RootPath returns the multistream state root without creating it. It is the
+// directory that holds one subdirectory per profile. It follows the per-OS
+// conventions (XDG state dir on Linux, %LOCALAPPDATA% on Windows,
+// ~/Library/Application Support on macOS) and can be overridden with
+// $MULTISTREAM_STATE for tests and unusual layouts.
+func RootPath() (string, error) {
 	if d := os.Getenv(envState); d != "" {
 		return d, nil
 	}
@@ -34,9 +36,20 @@ func DirPath() (string, error) {
 	return filepath.Join(base, "multistream"), nil
 }
 
-// StateDir returns the multistream state directory, creating it if needed.
-func StateDir() (string, error) {
-	d, err := DirPath()
+// DirPath returns the state directory for one profile (<root>/<profile>)
+// without creating it.
+func DirPath(profile string) (string, error) {
+	root, err := RootPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, profile), nil
+}
+
+// StateDir returns the state directory for one profile, creating it if
+// needed.
+func StateDir(profile string) (string, error) {
+	d, err := DirPath(profile)
 	if err != nil {
 		return "", err
 	}
@@ -86,11 +99,13 @@ func RelayConfigFile(dir string) string {
 	return filepath.Join(dir, "mediamtx.generated.yml")
 }
 
-// IPCNetworkAddr returns the network and address of the daemon IPC endpoint.
-// Unix uses a socket inside the state dir; Windows uses a named pipe.
-func IPCNetworkAddr(dir string) (string, string) {
+// IPCNetworkAddr returns the network and address of the daemon IPC endpoint
+// for one profile. Unix uses a socket inside the profile's state dir (so it
+// is per-profile by construction); Windows uses a named pipe that carries
+// the profile name.
+func IPCNetworkAddr(dir, profile string) (string, string) {
 	if runtime.GOOS == "windows" {
-		return "tcp", `\\.\pipe\multistream`
+		return "tcp", `\\.\pipe\multistream-` + profile
 	}
 	return "unix", filepath.Join(dir, "multistream.sock")
 }
@@ -153,13 +168,14 @@ func (st *SupervisorState) IsFresh(maxAge time.Duration) bool {
 	return time.Since(st.Updated) < maxAge
 }
 
-// ReadPid reads a pid file and returns the pid and whether it parsed.
+// ReadPid reads a pid file and returns the pid and whether it parsed. A
+// trailing newline (pid files written by hand) is tolerated.
 func ReadPid(path string) (int, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, false
 	}
-	n, err := strconv.Atoi(string(data))
+	n, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil || n <= 0 {
 		return 0, false
 	}
