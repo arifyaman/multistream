@@ -240,6 +240,184 @@ func TestProfilesMapFallbackWithoutDefaultProfile(t *testing.T) {
 	}
 }
 
+func TestActiveFileSelection(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(twoProfiles), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mustLoad := func() *File {
+		t.Helper()
+		f, err := LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	setActive := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, ActiveFileName), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// No active file: default_profile wins (existing behavior).
+	cfg, err := mustLoad().Select("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "me" {
+		t.Errorf("without active file = %q, want me (default_profile)", cfg.Name)
+	}
+
+	// The active file beats default_profile.
+	setActive("friend\n")
+	cfg, err = mustLoad().Select("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "friend" {
+		t.Errorf("active file selection = %q, want friend", cfg.Name)
+	}
+
+	// No trailing newline and surrounding whitespace are tolerated.
+	setActive("  me")
+	cfg, err = mustLoad().Select("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "me" {
+		t.Errorf("whitespace/no-newline selection = %q, want me", cfg.Name)
+	}
+
+	// An empty active file falls through to default_profile.
+	setActive("   \n")
+	cfg, err = mustLoad().Select("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "me" {
+		t.Errorf("empty active file selection = %q, want me", cfg.Name)
+	}
+
+	// An unknown profile in the active file is an error that lists the rest.
+	setActive("nope\n")
+	if _, err := mustLoad().Select(""); err == nil {
+		t.Error("want error for unknown profile in the active file")
+	} else if !strings.Contains(err.Error(), "nope") || !strings.Contains(err.Error(), "friend") {
+		t.Errorf("error should name the bad value and list profiles: %v", err)
+	}
+}
+
+func TestActiveFilePrecedence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(twoProfiles), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ActiveFileName), []byte("friend\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An explicit name (the -profile flag) beats the active file.
+	cfg, err := f.Select("me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "me" {
+		t.Errorf("explicit selection = %q, want me", cfg.Name)
+	}
+	// The env var also beats the active file.
+	t.Setenv(EnvProfile, "me")
+	cfg, err = f.Select("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "me" {
+		t.Errorf("env selection = %q, want me", cfg.Name)
+	}
+}
+
+func TestSetActive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(twoProfiles), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetActive("friend"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ActiveFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "friend\n" {
+		t.Errorf("active file = %q, want \"friend\\n\"", string(data))
+	}
+	st, err := os.Stat(filepath.Join(dir, ActiveFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Errorf("active file mode = %o, want 600", st.Mode().Perm())
+	}
+	// An unknown name is refused and the file is left untouched.
+	if err := f.SetActive("nope"); err == nil {
+		t.Error("want error for unknown profile name")
+	}
+	data, _ = os.ReadFile(filepath.Join(dir, ActiveFileName))
+	if string(data) != "friend\n" {
+		t.Errorf("active file changed after refused set: %q", string(data))
+	}
+	// EnabledProfile follows the file.
+	name, source, err := f.EnabledProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "friend" || source == "" {
+		t.Errorf("EnabledProfile = (%q, %q), want (friend, non-empty source)", name, source)
+	}
+}
+
+func TestEnabledProfileFallbacks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(twoProfiles), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No active file: default_profile.
+	name, source, err := f.EnabledProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "me" || source != "default_profile" {
+		t.Errorf("EnabledProfile = (%q, %q), want (me, default_profile)", name, source)
+	}
+	// A legacy file has the implicit default profile.
+	legacy, err := LoadConfig(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, source, err = legacy.EnabledProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != DefaultProfileName || source != "implicit default" {
+		t.Errorf("legacy EnabledProfile = (%q, %q), want (default, implicit default)", name, source)
+	}
+}
+
 func TestSelectUnknownProfile(t *testing.T) {
 	file, err := LoadConfig(writeConfig(t, twoProfiles))
 	if err != nil {

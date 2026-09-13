@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xlip/multistream/internal/version"
@@ -128,4 +130,66 @@ func TestExecuteProfileSelection(t *testing.T) {
 	if code := Execute([]string{"-config", legacy, "-profile", "friend", "config"}); code != 2 {
 		t.Errorf("Execute(legacy, -profile friend) = %d, want 2", code)
 	}
+}
+
+func TestExecuteSwitch(t *testing.T) {
+	path := writeConfigContent(t, profilesConfig)
+	dir := filepath.Dir(path)
+
+	// Enabling a profile writes the active file next to the config.
+	if code := Execute([]string{"-config", path, "switch", "friend"}); code != 0 {
+		t.Errorf("Execute(switch friend) = %d, want 0", code)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "active"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "friend\n" {
+		t.Errorf("active file = %q, want \"friend\\n\"", string(data))
+	}
+	// The next command without -profile follows the active file.
+	out := captureStdout(t, []string{"-config", path, "config"})
+	if !strings.Contains(out, "profile:      friend") {
+		t.Errorf("config after switch should select friend: %s", out)
+	}
+	// An unknown profile is a usage error and leaves the file untouched.
+	if code := Execute([]string{"-config", path, "switch", "nope"}); code != 2 {
+		t.Errorf("Execute(switch nope) = %d, want 2", code)
+	}
+	data, _ = os.ReadFile(filepath.Join(dir, "active"))
+	if string(data) != "friend\n" {
+		t.Errorf("active file changed after refused switch: %q", string(data))
+	}
+	// Too many arguments is a usage error.
+	if code := Execute([]string{"-config", path, "switch", "a", "b"}); code != 2 {
+		t.Errorf("Execute(switch a b) = %d, want 2", code)
+	}
+	// No argument prints the enabled profile.
+	out = captureStdout(t, []string{"-config", path, "switch"})
+	if !strings.Contains(out, "enabled profile: friend") {
+		t.Errorf("bare switch should print the enabled profile: %s", out)
+	}
+}
+
+// captureStdout runs Execute(args), fails the test on a non-zero exit code
+// and returns what the command wrote to stdout.
+func captureStdout(t *testing.T, args []string) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	code := Execute(args)
+	w.Close()
+	os.Stdout = old
+	if code != 0 {
+		t.Fatalf("Execute(%v) = %d, want 0", args, code)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }

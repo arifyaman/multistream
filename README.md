@@ -475,9 +475,24 @@ chain: their ingest path, their key files, their platforms, their daemon.
   with its own state directory, so one profile's failures or restart limits
   never touch another's. Run at most one profile's daemon at a time.
 - A command acts on one profile: the `-profile <name>` flag, then
-  `$MULTISTREAM_PROFILE`, then `default_profile`, then a profile named
-  `default`. A config file without a `profiles` map keeps working: it is one
-  implicit `default` profile.
+  `$MULTISTREAM_PROFILE`, then the `active` file next to the config file,
+  then `default_profile`, then a profile named `default`. A config file
+  without a `profiles` map keeps working: it is one implicit `default`
+  profile.
+
+**Switching the enabled profile.** One profile is enabled at a time, stored
+in an `active` file next to the config file (one line: the profile name).
+The service unit never names a profile: when the daemon starts, it reads
+the enabled profile and runs it. Switch users with:
+
+```
+multistream switch <profile>   # enable a profile (validates the name)
+multistream switch             # print the currently enabled profile
+sudo systemctl restart multistream-daemon   # restart your unit
+```
+
+The other profile's chain is fully down while it is not enabled - no
+processes, no RAM.
 
 To move an existing single-user setup over: stop the old daemon cleanly
 (`systemctl --user stop multistream`), keep or restructure the config as

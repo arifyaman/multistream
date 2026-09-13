@@ -22,6 +22,11 @@ const EnvRuntimeDir = "MULTISTREAM_RUNTIME_DIR"
 // EnvProfile selects a profile when -profile is not given.
 const EnvProfile = "MULTISTREAM_PROFILE"
 
+// ActiveFileName is the sidecar file (next to the config file) that holds
+// the enabled profile name, one line. Written by `multistream switch`,
+// read by every command and the daemon when no explicit profile is given.
+const ActiveFileName = "active"
+
 // DefaultProfileName is the name of the implicit profile in a legacy config
 // file (one without a "profiles" map).
 const DefaultProfileName = "default"
@@ -119,12 +124,19 @@ func (f *File) ProfileNames() []string {
 	return names
 }
 
-// Select resolves a profile: an explicit name (the -profile flag or the
-// MULTISTREAM_PROFILE env var), else default_profile, else a profile named
-// "default".
+// Select resolves a profile: an explicit name (the -profile flag), else the
+// MULTISTREAM_PROFILE env var, else the enabled profile from the active
+// file, else default_profile, else a profile named "default".
 func (f *File) Select(name string) (*Config, error) {
 	if name == "" {
 		name = os.Getenv(EnvProfile)
+	}
+	if name == "" {
+		active, err := ReadActive(f.ActiveFilePath())
+		if err != nil {
+			return nil, err
+		}
+		name = active
 	}
 	if name == "" {
 		if f.DefaultProfile != "" {
@@ -141,6 +153,82 @@ func (f *File) Select(name string) (*Config, error) {
 			name, strings.Join(f.ProfileNames(), ", "))
 	}
 	return nil, fmt.Errorf("profile %q not found (available: %s)", name, strings.Join(f.ProfileNames(), ", "))
+}
+
+// ActiveFilePath returns the path of this file's active file: the config
+// file's own directory plus ActiveFileName.
+func (f *File) ActiveFilePath() string {
+	return filepath.Join(filepath.Dir(f.src), ActiveFileName)
+}
+
+// ReadActive reads an enabled profile name from an active file. A missing or
+// empty file yields "" (no switch made); surrounding whitespace is trimmed.
+func ReadActive(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read active file %s: %w", path, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// SetActive writes the enabled profile name to the active file next to the
+// config file. The name must be a profile of this file. The write is atomic
+// (temp file + rename) and the file ends up 0600.
+func (f *File) SetActive(name string) error {
+	if _, ok := f.profiles[name]; !ok {
+		return fmt.Errorf("profile %q not found (available: %s)", name, strings.Join(f.ProfileNames(), ", "))
+	}
+	path := f.ActiveFilePath()
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".active-*")
+	if err != nil {
+		return fmt.Errorf("write active file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+	if _, err := tmp.WriteString(name + "\n"); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write active file: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write active file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write active file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("write active file: %w", err)
+	}
+	return nil
+}
+
+// EnabledProfile resolves the enabled profile without any explicit
+// selection: the active file if it names a profile of this file, else
+// default_profile, else a profile named "default". The source string names
+// where the answer came from.
+func (f *File) EnabledProfile() (string, string, error) {
+	name, err := ReadActive(f.ActiveFilePath())
+	if err != nil {
+		return "", "", err
+	}
+	if name != "" {
+		if _, ok := f.profiles[name]; !ok {
+			return "", "", fmt.Errorf("active file %s names unknown profile %q (available: %s)",
+				f.ActiveFilePath(), name, strings.Join(f.ProfileNames(), ", "))
+		}
+		return name, "active file " + f.ActiveFilePath(), nil
+	}
+	if f.DefaultProfile != "" {
+		return f.DefaultProfile, "default_profile", nil
+	}
+	if _, ok := f.profiles[DefaultProfileName]; ok {
+		return DefaultProfileName, "implicit default", nil
+	}
+	return "", "", fmt.Errorf("no enabled profile: no active file, no default_profile and no profile named %q (available: %s)",
+		DefaultProfileName, strings.Join(f.ProfileNames(), ", "))
 }
 
 // PlatformByName looks up a platform by name.

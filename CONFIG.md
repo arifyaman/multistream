@@ -51,12 +51,19 @@ Selecting a profile, highest priority first:
 
 1. the `-profile <name>` flag (any command)
 2. `$MULTISTREAM_PROFILE`
-3. `default_profile`
-4. a profile named `default`
+3. the `active` file next to the config file (written by `multistream switch`)
+4. `default_profile`
+5. a profile named `default`
 
 Each profile runs its own daemon (`multistream -profile <name> daemon`) with
 its own state, IPC endpoint and single-instance guard; in practice only one
 profile's daemon runs at a time.
+
+The enabled profile - the one a bare `multistream daemon` (or your service
+unit) runs - is stored in the `active` file next to the config file. Set it
+with `multistream switch <name>` and print it with bare `multistream switch`;
+the switch never touches a running daemon, so restart the service to apply
+it.
 
 ## Fields
 

@@ -66,6 +66,11 @@ func Execute(args []string) int {
 		fmt.Fprintln(os.Stderr, "multistream:", err)
 		return 2
 	}
+	// switch operates on the file (it needs every profile, and must work
+	// even when the currently enabled selection is broken).
+	if cmd == "switch" {
+		return runSwitch(file, rest)
+	}
 	cfg, err := file.Select(profile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "multistream: %v\n", err)

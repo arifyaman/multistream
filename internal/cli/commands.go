@@ -31,12 +31,16 @@ Usage:
   multistream daemon                  run the supervisor (spawn + watch ffmpeg,
                                         and the relay when manage_mediamtx is set)
   multistream config                  show effective config
+  multistream switch [profile]        show or set the enabled profile (the
+                                        active file next to the config; a
+                                        service restart applies it)
 
 Flags:
   -config string    config file (default: $MULTISTREAM_CONFIG, per-user config
                     dir, /etc/multistream/config.json, ./config.json)
   -profile string   profile from the config's profiles map (default:
-                    $MULTISTREAM_PROFILE, then default_profile, then "default")
+                    $MULTISTREAM_PROFILE, then the active file, then
+                    default_profile, then "default")
   -version          print version and exit
   -h, --help        show this help
 
@@ -219,6 +223,32 @@ func runDaemon(cfg *config.Config) int {
 		fmt.Fprintln(os.Stderr, "multistream daemon:", err)
 		return 1
 	}
+	return 0
+}
+
+// runSwitch prints or sets the enabled profile: the one-line "active" file
+// next to the config file. It never touches a running daemon; restarting
+// the service applies the enabled profile.
+func runSwitch(file *config.File, args []string) int {
+	if len(args) > 1 {
+		fmt.Fprintln(os.Stderr, "usage: multistream switch [profile]")
+		return 2
+	}
+	if len(args) == 0 {
+		name, source, err := file.EnabledProfile()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "multistream: %v\n", err)
+			return 2
+		}
+		fmt.Printf("enabled profile: %s (%s)\n", name, source)
+		return 0
+	}
+	if err := file.SetActive(args[0]); err != nil {
+		fmt.Fprintf(os.Stderr, "multistream: %v\n", err)
+		return 2
+	}
+	fmt.Printf("enabled profile: %s (written to %s)\n", args[0], file.ActiveFilePath())
+	fmt.Println("restart the multistream service to apply")
 	return 0
 }
 
